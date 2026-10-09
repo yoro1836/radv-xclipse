@@ -725,7 +725,7 @@ gfx10_init_graphics_preamble_state(const struct ac_preamble_state *state,
 
    /* Xclipse 920: the pixel pipe uses the GFX11 occlusion mechanism (ZPASS_DONE ignored, counters
     * via PIXEL_PIPE_STAT_CONTROL/DUMP) with the GFX10.3 register interface. */
-   if (info->gfx_level >= GFX11 || info->gfx11_shader_core) {
+   if (ac_uses_pixel_pipe_occlusion(info)) {
       uint64_t rb_mask = BITFIELD64_MASK(info->max_render_backends);
 
       ac_pm4_cmd_add(pm4, PKT3(PKT3_EVENT_WRITE, 2, 0));

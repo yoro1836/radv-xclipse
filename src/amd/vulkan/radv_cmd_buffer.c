@@ -6229,13 +6229,15 @@ radv_emit_occlusion_query_state(struct radv_cmd_buffer *cmd_buffer)
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const enum amd_gfx_level gfx_level = pdev->info.gfx_level;
+   /* Xclipse with fake occlusion queries: the DB never counts. */
    const bool enable_occlusion_queries =
-      cmd_buffer->state.active_occlusion_queries || cmd_buffer->state.inherited_occlusion_queries;
+      (cmd_buffer->state.active_occlusion_queries || cmd_buffer->state.inherited_occlusion_queries) &&
+      !(pdev->info.gfx11_shader_core && pdev->info.xclipse_occlusion == AC_XCLIPSE_OCC_FAKE);
    uint32_t db_count_control;
 
    /* Xclipse 920: occlusion counting follows GFX11 conventions (DB ignores ZPASS_DONE), so program
     * DB_COUNT_CONTROL the GFX11 way. */
-   const bool gfx11_occlusion = gfx_level >= GFX11 || pdev->info.gfx11_shader_core;
+   const bool gfx11_occlusion = ac_uses_pixel_pipe_occlusion(&pdev->info);
 
    if (!enable_occlusion_queries) {
       db_count_control = S_028004_ZPASS_INCREMENT_DISABLE(!gfx11_occlusion);

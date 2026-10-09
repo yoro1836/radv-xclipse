@@ -102,7 +102,7 @@ radv_emit_event_write(const struct radeon_info *info, struct radv_cmd_stream *cs
       } else {
          radeon_emit(PKT3(PKT3_EVENT_WRITE, 2, 0));
          /* Xclipse 920: the DB ignores ZPASS_DONE; it uses the GFX11 PIXEL_PIPE mechanism. */
-         if (info->gfx_level >= GFX11 || info->gfx11_shader_core) {
+         if (ac_uses_pixel_pipe_occlusion(info)) {
             radeon_emit(EVENT_TYPE(V_028A90_PIXEL_PIPE_STAT_DUMP) | EVENT_INDEX(1));
          } else {
             radeon_emit(EVENT_TYPE(V_028A90_ZPASS_DONE) | EVENT_INDEX(1));
@@ -309,6 +309,29 @@ build_occlusion_query_shader(uint64_t enabled_rb_mask, uint32_t max_render_backe
    return b.shader;
 }
 
+/* Xclipse with fake occlusion queries (AC_XCLIPSE_OCC_FAKE): instead of the DB dumping its counters,
+ * the CP writes them, a begin of 0 and an end of 1 per enabled RB, each with the valid bit, so the
+ * query completes and reports samples passed. */
+static bool
+radv_xclipse_fake_occlusion(const struct radv_physical_device *pdev)
+{
+   return pdev->info.gfx11_shader_core && pdev->info.xclipse_occlusion == AC_XCLIPSE_OCC_FAKE;
+}
+
+static void
+radv_xclipse_write_fake_occlusion(struct radv_cmd_buffer *cmd_buffer, uint64_t va, uint32_t count)
+{
+   struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+   const uint32_t value[2] = {count, 0x80000000};
+
+   for (unsigned rb = 0; rb < pdev->info.max_render_backends; rb++) {
+      if (!(pdev->info.enabled_rb_mask & BITFIELD64_BIT(rb)))
+         continue;
+      radv_cs_write_data(device, cmd_buffer->cs, V_371_MICRO_ENGINE, va + rb * 16, 2, value, false);
+   }
+}
+
 static void
 radv_begin_occlusion_query(struct radv_cmd_buffer *cmd_buffer, uint64_t va, VkQueryControlFlags flags)
 {
@@ -340,6 +363,11 @@ radv_begin_occlusion_query(struct radv_cmd_buffer *cmd_buffer, uint64_t va, VkQu
       }
    }
 
+   if (radv_xclipse_fake_occlusion(pdev)) {
+      radv_xclipse_write_fake_occlusion(cmd_buffer, va, 0);
+      return;
+   }
+
    radv_emit_event_write(&pdev->info, cmd_buffer->cs, RADV_EVENT_WRITE_OCCLUSION_QUERY, va);
 }
 
@@ -360,6 +388,11 @@ radv_end_occlusion_query(struct radv_cmd_buffer *cmd_buffer, uint64_t va)
       cmd_buffer->state.perfect_occlusion_queries_enabled = false;
 
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_OCCLUSION_QUERY;
+   }
+
+   if (radv_xclipse_fake_occlusion(pdev)) {
+      radv_xclipse_write_fake_occlusion(cmd_buffer, va + 8, 1);
+      return;
    }
 
    radv_emit_event_write(&pdev->info, cmd_buffer->cs, RADV_EVENT_WRITE_OCCLUSION_QUERY, va + 8);

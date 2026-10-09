@@ -225,6 +225,13 @@ enum ac_xclipse_model {
 
 const char *ac_xclipse_model_name(enum ac_xclipse_model model);
 
+/* How an Xclipse counts occlusion queries (RADV_XCLIPSE_OCC / debug.radv_xclipse_occ). */
+enum ac_xclipse_occlusion {
+   AC_XCLIPSE_OCC_PIXEL_PIPE = 0, /* GFX11 PIXEL_PIPE_STAT_CONTROL/DUMP: the 920 ignores ZPASS_DONE */
+   AC_XCLIPSE_OCC_ZPASS,          /* GFX10.3 ZPASS_DONE and DB_COUNT_CONTROL */
+   AC_XCLIPSE_OCC_FAKE,           /* no DB counting: every query reports samples passed */
+};
+
 struct radeon_info {
    /* Device info. */
    char marketing_name[64];
@@ -275,6 +282,8 @@ struct radeon_info {
    enum amd_gfx_level desc_gfx_level;
    /* Which Xclipse. pci_id is 0x73A0 on all of them: key model-specific tuning on this. */
    enum ac_xclipse_model xclipse_model;
+   /* Only consulted with gfx11_shader_core; see ac_uses_pixel_pipe_occlusion(). */
+   enum ac_xclipse_occlusion xclipse_occlusion;
    uint32_t family_id;
    uint32_t chip_external_rev;
    uint32_t chip_rev; /* 0 = A0, 1 = A1, etc. */
@@ -532,6 +541,15 @@ void ac_print_gpu_info(FILE *f, const struct radeon_info *info, int fd);
  * Samsung's cut-down Van Gogh, VANGOGHLITE; everything keyed on the family (shader caches, ISA,
  * workarounds) keeps using ac_get_family_name. */
 const char *ac_get_gpu_display_name(const struct radeon_info *info);
+
+/* Occlusion queries count with the GFX11 PIXEL_PIPE_STAT events and DB_COUNT_CONTROL conventions:
+ * GFX11+, and an Xclipse unless RADV_XCLIPSE_OCC picks ZPASS_DONE. */
+static inline bool
+ac_uses_pixel_pipe_occlusion(const struct radeon_info *info)
+{
+   return info->gfx_level >= GFX11 ||
+          (info->gfx11_shader_core && info->xclipse_occlusion != AC_XCLIPSE_OCC_ZPASS);
+}
 int ac_get_gs_table_depth(enum amd_gfx_level gfx_level, enum radeon_family family);
 void ac_get_raster_config(const struct radeon_info *info, uint32_t *raster_config_p,
                           uint32_t *raster_config_1_p, uint32_t *se_tile_repeat_p);

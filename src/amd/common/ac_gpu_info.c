@@ -1296,6 +1296,21 @@ ac_identify_chip(struct radeon_info *info, const struct drm_amdgpu_info_device *
 
    info->desc_gfx_level = info->gfx11_shader_core ? GFX11 : info->gfx_level;
 
+   /* Occlusion queries (RADV_XCLIPSE_OCC / debug.radv_xclipse_occ, enum ac_xclipse_occlusion).
+    * The 940 hangs the CP on the PIXEL_PIPE_STAT_DUMP that ends a query with counting on (the EOP
+    * after it never lands), so it reports every query as visible until a counting method is found
+    * that works there. */
+   if (info->xclipse_model != AC_XCLIPSE_NONE) {
+      const char *src = "default";
+      int want = xclipse_knob_int("RADV_XCLIPSE_OCC", "debug.radv_xclipse_occ", &src);
+      if (want >= AC_XCLIPSE_OCC_PIXEL_PIPE && want <= AC_XCLIPSE_OCC_FAKE)
+         info->xclipse_occlusion = want;
+      else
+         info->xclipse_occlusion =
+            info->xclipse_model == AC_XCLIPSE_940 ? AC_XCLIPSE_OCC_FAKE : AC_XCLIPSE_OCC_PIXEL_PIPE;
+      RADV_LOGI("[XCLIPSE] occlusion=%d (from %s)", info->xclipse_occlusion, src);
+   }
+
    /* Descriptor format (RADV_XCLIPSE_DESCGFX / debug.radv_xclipse_descgfx):
     *      unset -> inherited behaviour
     *      10    -> build descriptors at gfx_level (GFX10_3)
@@ -2011,7 +2026,7 @@ ac_xclipse_dump_kernel(const struct drm_amdgpu_info_device *dev,
       /* The switches a bring-up test is likely to flip, so a log says what it ran with. */
       "debug.radv_xclipse_titan", "debug.radv_xclipse_ctxinit", "debug.radv_xclipse_dcc",
       "debug.radv_xclipse_dcc_small", "debug.radv_xclipse_gbcfg", "debug.radv_debug",
-      "debug.radv_perftest",
+      "debug.radv_perftest", "debug.radv_xclipse_occ",
    };
    for (unsigned i = 0; i < ARRAY_SIZE(props); i++) {
       char v[PROP_VALUE_MAX] = {0};
@@ -2077,9 +2092,10 @@ ac_xclipse_dump_derived(const struct radeon_info *info)
                  info->min_good_cu_per_sa, info->max_good_cu_per_sa, info->num_rb,
                  info->max_render_backends, (uint64_t)info->enabled_rb_mask, info->num_tcc_blocks,
                  info->max_tcc_blocks, info->l2_cache_size, info->gb_addr_config);
-   AC_XCLIPSE_ID("[ID] radv has_clear_state=%d dedicated_vram=%d gart_kb=%u vram_kb=%u rt_ip=%d",
+   AC_XCLIPSE_ID("[ID] radv has_clear_state=%d dedicated_vram=%d gart_kb=%u vram_kb=%u rt_ip=%d "
+                 "occlusion=%d",
                  info->has_clear_state, info->has_dedicated_vram, info->gart_size_kb,
-                 info->vram_size_kb, info->rt_ip_version);
+                 info->vram_size_kb, info->rt_ip_version, info->xclipse_occlusion);
    for (unsigned i = 0; i < AMD_NUM_IP_TYPES; i++) {
       if (info->ip[i].num_queues)
          AC_XCLIPSE_ID("[ID] radv ip %s=%u.%u.%u queues=%u", ac_get_ip_type_string(info, i),
