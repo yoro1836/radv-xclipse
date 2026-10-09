@@ -86,10 +86,23 @@ ac_emit_cp_write_data_imm(struct ac_cmdbuf *cs, unsigned engine_sel,
    ac_emit_cp_write_data(cs, engine_sel, V_371_MEMORY, va, 1, &value, false);
 }
 
+/* Xclipse 940 (MGFX2) GL2 coherence switches, set once at device init (ac_gpu_info.c); globals
+ * like the TITAN register map, since the emitters have no device. The S24 kernel carries an M2
+ * workaround for reads not seeing writes (GFXSW-24476), and the 940 hangs with the CP polling the
+ * fence of an EOP, every other block idle.
+ *   ac_xclipse_wait_mem_bypass: WAIT_REG_MEM polls memory with CACHE_POLICY=BYPASS, so a stale GL2
+ *                               line cannot hide a fence the EOP wrote to memory
+ *   ac_xclipse_eop_via_l2:      RELEASE_MEM writes its data through GL2 (DST_SEL=TC_L2) */
+bool ac_xclipse_wait_mem_bypass;
+bool ac_xclipse_eop_via_l2;
+
 void
 ac_emit_cp_wait_mem(struct ac_cmdbuf *cs, uint64_t va, uint32_t ref,
                     uint32_t mask, unsigned flags)
 {
+   if (ac_xclipse_wait_mem_bypass)
+      flags |= 3u << 25; /* CACHE_POLICY = BYPASS */
+
    ac_cmdbuf_begin(cs);
    ac_cmdbuf_emit(PKT3(PKT3_WAIT_REG_MEM, 5, 0));
    ac_cmdbuf_emit(WAIT_REG_MEM_MEM_SPACE(1) | flags);
@@ -473,6 +486,9 @@ ac_emit_cp_release_mem(struct ac_cmdbuf *cs, enum amd_gfx_level gfx_level,
    const uint32_t op = EVENT_TYPE(event) |
                        EVENT_INDEX(event == V_028A90_CS_DONE || event == V_028A90_PS_DONE ? 6 : 5) |
                        event_flags;
+
+   if (ac_xclipse_eop_via_l2 && dst_sel == EOP_DST_SEL_MEM)
+      dst_sel = EOP_DST_SEL_TC_L2;
    const uint32_t sel = EOP_DST_SEL(dst_sel) |
                         EOP_INT_SEL(int_sel) |
                         EOP_DATA_SEL(data_sel);

@@ -43,6 +43,10 @@ int ac_xclipse_runcheck(void);
 /* Set once at device init when the chip is CHIP_TITAN. A global because
  * __ac_cmdbuf_set_reg_seq() has no device pointer; assumes one GPU per process. */
 extern bool ac_titan_regmap_active;
+
+/* Xclipse 940 GL2 coherence switches, see ac_cmdbuf_cp.c. */
+extern bool ac_xclipse_wait_mem_bypass;
+extern bool ac_xclipse_eop_via_l2;
 extern uint32_t ac_titan_regmap_hits;   /* remapped writes (proves the arm engaged) */
 
 /* RADV_XCLIPSE_TITAN: how much of the map to apply. Levels are cumulative, so a regression can be
