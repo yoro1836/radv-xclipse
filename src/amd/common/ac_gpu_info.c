@@ -1312,20 +1312,12 @@ ac_identify_chip(struct radeon_info *info, const struct drm_amdgpu_info_device *
    }
 
    /* GL2 coherence of CP fences (ac_cmdbuf_cp.c): RADV_XCLIPSE_WAITBYPASS /
-    * debug.radv_xclipse_waitbypass (default on for the 940) and RADV_XCLIPSE_EOPL2 /
-    * debug.radv_xclipse_eopl2 (default off: CPU-read EOP data would sit in GL2). */
+    * debug.radv_xclipse_waitbypass, default on for the 940. */
    if (info->xclipse_model != AC_XCLIPSE_NONE) {
       const char *src = "default";
       int want = xclipse_knob_int("RADV_XCLIPSE_WAITBYPASS", "debug.radv_xclipse_waitbypass", &src);
       ac_xclipse_wait_mem_bypass = want >= 0 ? want != 0 : info->xclipse_model == AC_XCLIPSE_940;
-      want = xclipse_knob_int("RADV_XCLIPSE_EOPL2", "debug.radv_xclipse_eopl2", &src);
-      ac_xclipse_eop_via_l2 = want > 0;
-      /* An EOP that writes into GL2 is never seen by a poll that bypasses it: the S24 hung on the
-       * first fence with both on (memory still 0). EOPL2 takes the poll back through GL2. */
-      if (ac_xclipse_eop_via_l2)
-         ac_xclipse_wait_mem_bypass = false;
-      RADV_LOGI("[XCLIPSE] wait_mem_bypass=%d eop_via_l2=%d", ac_xclipse_wait_mem_bypass,
-                ac_xclipse_eop_via_l2);
+      RADV_LOGI("[XCLIPSE] wait_mem_bypass=%d", ac_xclipse_wait_mem_bypass);
    }
 
    /* Descriptor format (RADV_XCLIPSE_DESCGFX / debug.radv_xclipse_descgfx):
@@ -2044,7 +2036,6 @@ ac_xclipse_dump_kernel(const struct drm_amdgpu_info_device *dev,
       "debug.radv_xclipse_titan", "debug.radv_xclipse_ctxinit", "debug.radv_xclipse_dcc",
       "debug.radv_xclipse_dcc_small", "debug.radv_xclipse_gbcfg", "debug.radv_debug",
       "debug.radv_perftest", "debug.radv_xclipse_occ", "debug.radv_xclipse_waitbypass",
-      "debug.radv_xclipse_eopl2",
    };
    for (unsigned i = 0; i < ARRAY_SIZE(props); i++) {
       char v[PROP_VALUE_MAX] = {0};
@@ -2111,10 +2102,10 @@ ac_xclipse_dump_derived(const struct radeon_info *info)
                  info->max_render_backends, (uint64_t)info->enabled_rb_mask, info->num_tcc_blocks,
                  info->max_tcc_blocks, info->l2_cache_size, info->gb_addr_config);
    AC_XCLIPSE_ID("[ID] radv has_clear_state=%d dedicated_vram=%d gart_kb=%u vram_kb=%u rt_ip=%d "
-                 "occlusion=%d wait_bypass=%d eop_l2=%d",
+                 "occlusion=%d wait_bypass=%d",
                  info->has_clear_state, info->has_dedicated_vram, info->gart_size_kb,
                  info->vram_size_kb, info->rt_ip_version, info->xclipse_occlusion,
-                 ac_xclipse_wait_mem_bypass, ac_xclipse_eop_via_l2);
+                 ac_xclipse_wait_mem_bypass);
    for (unsigned i = 0; i < AMD_NUM_IP_TYPES; i++) {
       if (info->ip[i].num_queues)
          AC_XCLIPSE_ID("[ID] radv ip %s=%u.%u.%u queues=%u", ac_get_ip_type_string(info, i),

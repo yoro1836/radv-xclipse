@@ -86,15 +86,16 @@ ac_emit_cp_write_data_imm(struct ac_cmdbuf *cs, unsigned engine_sel,
    ac_emit_cp_write_data(cs, engine_sel, V_371_MEMORY, va, 1, &value, false);
 }
 
-/* Xclipse 940 (MGFX2) GL2 coherence switches, set once at device init (ac_gpu_info.c); globals
- * like the TITAN register map, since the emitters have no device. The S24 kernel carries an M2
- * workaround for reads not seeing writes (GFXSW-24476), and the 940 hangs with the CP polling the
- * fence of an EOP, every other block idle.
- *   ac_xclipse_wait_mem_bypass: WAIT_REG_MEM polls memory with CACHE_POLICY=BYPASS, so a stale GL2
- *                               line cannot hide a fence the EOP wrote to memory
- *   ac_xclipse_eop_via_l2:      RELEASE_MEM writes its data through GL2 (DST_SEL=TC_L2) */
+/* Xclipse 940 (MGFX2): WAIT_REG_MEM polls memory with CACHE_POLICY=BYPASS. Set once at device
+ * init (ac_gpu_info.c); a global like the TITAN register map, since the emitters have no device.
+ *
+ * Fences live in memory the sgpu kernel maps NC (cached in GL2). The EOP writes them straight to
+ * memory (DST_SEL=MEMORY_CONTROLLER) while the ME polls through GL2. In every 940 hang report the
+ * EOP had finished (CB/DB clean, no QU stall on EOP done or write confirm, EA/UTCL2/GCRIU idle) and
+ * the ME's reads were returning (no ME_WAITING_ON_TC_READ_DATA), yet it never saw the value: a GL2
+ * line refilled by a poll between the EOP's GL2 invalidate and its write. The same sequence had
+ * completed 6-8 times earlier in each IB. Bypassing GL2 for the poll reads what the EOP wrote. */
 bool ac_xclipse_wait_mem_bypass;
-bool ac_xclipse_eop_via_l2;
 
 void
 ac_emit_cp_wait_mem(struct ac_cmdbuf *cs, uint64_t va, uint32_t ref,
@@ -487,8 +488,6 @@ ac_emit_cp_release_mem(struct ac_cmdbuf *cs, enum amd_gfx_level gfx_level,
                        EVENT_INDEX(event == V_028A90_CS_DONE || event == V_028A90_PS_DONE ? 6 : 5) |
                        event_flags;
 
-   if (ac_xclipse_eop_via_l2 && dst_sel == EOP_DST_SEL_MEM)
-      dst_sel = EOP_DST_SEL_TC_L2;
    const uint32_t sel = EOP_DST_SEL(dst_sel) |
                         EOP_INT_SEL(int_sel) |
                         EOP_DATA_SEL(data_sel);
