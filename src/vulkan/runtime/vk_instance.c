@@ -25,6 +25,8 @@
 
 #ifdef __ANDROID__
 #include <android/log.h>
+/* From the driver (src/amd/common/ac_xclipse_log.h). */
+void ac_xclipse_id_log(int prio, const char *fmt, ...);
 #endif
 
 #include "util/libdrm.h"
@@ -423,9 +425,9 @@ enumerate_drm_physical_devices_locked(struct vk_instance *instance)
 
 #ifdef __ANDROID__
    /* Xclipse bring-up: an app that finds no GPU otherwise leaves nothing in logcat. */
-   __android_log_print(max_devices < 1 ? ANDROID_LOG_ERROR : ANDROID_LOG_INFO, "RADV_XCLIPSE_ID",
-                       "[ENUM] drmGetDevices2 -> %d (errno %d)", max_devices,
-                       max_devices < 0 ? -max_devices : 0);
+   ac_xclipse_id_log(max_devices < 1 ? ANDROID_LOG_ERROR : ANDROID_LOG_INFO,
+                     "[ENUM] drmGetDevices2 -> %d (errno %d)", max_devices,
+                     max_devices < 0 ? -max_devices : 0);
 #endif
 
    if (max_devices < 1)
@@ -437,12 +439,12 @@ enumerate_drm_physical_devices_locked(struct vk_instance *instance)
       result = instance->physical_devices.try_create_for_drm(instance, devices[i], &pdevice);
 
 #ifdef __ANDROID__
-      __android_log_print(result == VK_SUCCESS ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR,
-                          "RADV_XCLIPSE_ID", "[ENUM] device %u bus=%d nodes=0x%x render=%s -> %d", i,
-                          devices[i]->bustype, devices[i]->available_nodes,
-                          (devices[i]->available_nodes & (1 << DRM_NODE_RENDER))
-                             ? devices[i]->nodes[DRM_NODE_RENDER] : "-",
-                          result);
+      ac_xclipse_id_log(result == VK_SUCCESS ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR,
+                        "[ENUM] device %u bus=%d nodes=0x%x render=%s -> %d", i,
+                        devices[i]->bustype, devices[i]->available_nodes,
+                        (devices[i]->available_nodes & (1 << DRM_NODE_RENDER))
+                           ? devices[i]->nodes[DRM_NODE_RENDER] : "-",
+                        result);
 #endif
 
       /* Incompatible DRM device, skip. */

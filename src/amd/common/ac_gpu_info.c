@@ -360,7 +360,7 @@ drmGetFormatModifierName(uint64_t modifier)
 
 #ifdef __ANDROID__
 /* Android discards stderr, and the messages this file prints there are why a GPU was rejected.
- * Copy them to logcat (tag RADV_XCLIPSE_ID) as well. */
+ * Copy them to the Xclipse ID log (ac_xclipse_log.h) as well. */
 static int
 ac_fprintf_logcat(FILE *f, const char *fmt, ...)
 {
@@ -372,7 +372,7 @@ ac_fprintf_logcat(FILE *f, const char *fmt, ...)
       va_start(ap, fmt);
       vsnprintf(buf, sizeof(buf), fmt, ap);
       va_end(ap);
-      __android_log_write(ANDROID_LOG_ERROR, "RADV_XCLIPSE_ID", buf);
+      ac_xclipse_id_log(ANDROID_LOG_ERROR, "%s", buf);
    }
    va_start(ap, fmt);
    r = vfprintf(f, fmt, ap);
@@ -1984,7 +1984,7 @@ void ac_fill_tess_info(struct radeon_info *info)
 /* Xclipse ID dump (logcat -s RADV_XCLIPSE_ID). Printed once per process: always on a model this
  * build is not tuned for (940, UNKNOWN), at debug.radv_xclipse_log >= 1 on the others. Bring-up
  * of a new model starts from it: what the kernel and Android report, raw, then what we derived. */
-#define AC_XCLIPSE_ID(...) __android_log_print(ANDROID_LOG_INFO, "RADV_XCLIPSE_ID", __VA_ARGS__)
+#define AC_XCLIPSE_ID(...) ac_xclipse_id_log(ANDROID_LOG_INFO, __VA_ARGS__)
 
 static bool
 ac_xclipse_id_wanted(enum ac_xclipse_model model)

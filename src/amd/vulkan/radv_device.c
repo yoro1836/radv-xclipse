@@ -41,6 +41,7 @@
 #include "radv_logcat.h"
 #ifdef __ANDROID__
 #include <android/log.h>
+#include "ac_xclipse_log.h"
 #endif
 #include "git_sha1.h"
 #include "vk_sync.h"
@@ -1457,6 +1458,16 @@ radv_destroy_device(struct radv_device *device, const VkAllocationCallbacks *pAl
    vk_free(&device->vk.alloc, device);
 }
 
+#ifdef __ANDROID__
+/* Proves the loader picked this library at all: an app that falls back to the system driver, or
+ * fails before vkCreateInstance, otherwise leaves no trace of us. */
+__attribute__((constructor)) static void
+radv_xclipse_id_on_load(void)
+{
+   ac_xclipse_id_log(ANDROID_LOG_INFO, "[LOAD] vulkan.radeon.so loaded: Mesa " PACKAGE_VERSION MESA_GIT_SHA1);
+}
+#endif
+
 static VkResult
 radv_create_device(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCreateInfo,
                    const VkAllocationCallbacks *pAllocator, VkDevice *pDevice)
@@ -1760,8 +1771,8 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
 #ifdef __ANDROID__
    /* Xclipse bring-up: most failure paths in device creation return without a message. */
    if (result != VK_SUCCESS)
-      __android_log_print(ANDROID_LOG_ERROR, "RADV_XCLIPSE_ID", "[DEVICE] vkCreateDevice -> %d (%u extensions, %u queue infos)",
-                          result, pCreateInfo->enabledExtensionCount, pCreateInfo->queueCreateInfoCount);
+      ac_xclipse_id_log(ANDROID_LOG_ERROR, "[DEVICE] vkCreateDevice -> %d (%u extensions, %u queue infos)",
+                        result, pCreateInfo->enabledExtensionCount, pCreateInfo->queueCreateInfoCount);
 #endif
    return result;
 }

@@ -48,7 +48,9 @@ The driver works on the Xclipse 920 and the Xclipse 530. Other Xclipse models ar
 for now.
 
 The Xclipse 940 (Exynos 2400, Galaxy S24) is in bring-up: the driver recognises it and logs what
-the kernel reports about it (`adb logcat -s RADV_XCLIPSE_ID`), but rendering is untested.
+the kernel reports about it, but rendering is untested. The same lines go to logcat
+(`adb logcat -s RADV_XCLIPSE_ID`) and to `radv_xclipse_id.txt` in the app's
+`Android/data/<package>/files`, which survives a busy logcat.
 
 ## Runtime switches
 

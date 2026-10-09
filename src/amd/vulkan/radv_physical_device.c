@@ -2979,8 +2979,8 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
    /* Allow all devices on a virtual winsys, otherwise do a basic support check. */
    if (!radv_is_gpu_supported(&pdev->info)) {
 #ifdef __ANDROID__
-      __android_log_print(ANDROID_LOG_ERROR, "RADV_XCLIPSE_ID", "[ENUM] '%s' (gfx_level %d) rejected by radv_is_gpu_supported",
-                          ac_get_family_name(pdev->info.family), pdev->info.gfx_level);
+      ac_xclipse_id_log(ANDROID_LOG_ERROR, "[ENUM] '%s' (gfx_level %d) rejected by radv_is_gpu_supported",
+                        ac_get_family_name(pdev->info.family), pdev->info.gfx_level);
 #endif
       if (instance->debug_flags & RADV_DEBUG_STARTUP)
          fprintf(stderr, "radv: info: device '%s' is not supported by RADV.\n", ac_get_family_name(pdev->info.family));
@@ -2991,8 +2991,8 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
    pdev->addrlib = ac_addrlib_create(&pdev->info, &pdev->info.max_alignment);
    if (!pdev->addrlib) {
 #ifdef __ANDROID__
-      __android_log_print(ANDROID_LOG_ERROR, "RADV_XCLIPSE_ID", "[ENUM] addrlib creation failed (family_id %u)",
-                          pdev->info.family_id);
+      ac_xclipse_id_log(ANDROID_LOG_ERROR, "[ENUM] addrlib creation failed (family_id %u)",
+                        pdev->info.family_id);
 #endif
       result = VK_ERROR_INITIALIZATION_FAILED;
       goto fail_wsi;

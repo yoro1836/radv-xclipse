@@ -22,6 +22,12 @@ extern "C" {
 
 int ac_xclipse_log_level(void);
 
+/* Bring-up identity log: logcat tag RADV_XCLIPSE_ID and, because a busy logcat ring is overwritten
+ * within seconds, also radv_xclipse_id.txt in the app's external files directory
+ * (/sdcard/Android/data/<package>/files), RADV_XCLIPSE_ID_DIR or debug.radv_xclipse_id_dir.
+ * Always on: it is a few dozen lines per process. prio is an android_LogPriority. */
+void ac_xclipse_id_log(int prio, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+
 #ifdef __cplusplus
 }
 #endif
