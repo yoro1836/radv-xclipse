@@ -8237,6 +8237,8 @@ radv_BeginCommandBuffer(VkCommandBuffer commandBuffer, const VkCommandBufferBegi
          }
          cmd_buffer->gfx9_fence_va = radv_buffer_get_va(cmd_buffer->upload.upload_bo);
          cmd_buffer->gfx9_fence_va += fence_offset;
+         cmd_buffer->gfx9_fence_cpu =
+            cmd_buffer->upload.map ? (const uint32_t *)((const char *)cmd_buffer->upload.map + fence_offset) : NULL;
       } else if (!cmd_buffer->gfx9_fence_bo_tmz) {
          struct radeon_winsys_bo *fence_bo = NULL;
 

@@ -1936,6 +1936,9 @@ radv_queue_submit_normal(struct radv_queue *queue, struct vk_queue_submit *submi
          goto fail;
 
       if (radv_device_fault_detection_enabled(device)) {
+         queue->hang_cmd_buffer_count = MIN2(advance, ARRAY_SIZE(queue->hang_cmd_buffers));
+         for (unsigned c = 0; c < queue->hang_cmd_buffer_count; ++c)
+            queue->hang_cmd_buffers[c] = (struct radv_cmd_buffer *)submission->command_buffers[j + advance - 1 - c];
          result = radv_check_gpu_hangs(queue, &submit);
       }
 

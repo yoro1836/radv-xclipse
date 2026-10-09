@@ -45,6 +45,7 @@
 #include <android/log.h>
 #include "ac_xclipse_log.h"
 #endif
+#include "radv_cmd_buffer.h"
 
 #define RADV_DUMP_DIR "radv_dumps"
 
@@ -1039,6 +1040,17 @@ radv_check_gpu_hangs(struct radv_queue *queue, const struct radv_winsys_submit_i
    fprintf(stderr, "radv: GPU hang detected...\n");
 #ifdef __ANDROID__
    ac_xclipse_id_log(ANDROID_LOG_ERROR, "[HANG] GPU hang detected, writing the report");
+   /* The CB/DB flush fence of each command buffer in the submission, newest first: the last value
+    * the IB asks the EOP to write against what memory holds. Equal means the EOP wrote it and the
+    * CP's wait missed it; lower means the EOP never wrote it. */
+   for (unsigned c = 0; c < queue->hang_cmd_buffer_count; ++c) {
+      const struct radv_cmd_buffer *cb = queue->hang_cmd_buffers[c];
+      if (!cb->gfx9_fence_cpu)
+         continue;
+      ac_xclipse_id_log(ANDROID_LOG_ERROR,
+                        "[HANG] cmdbuf %u fence va=0x%" PRIx64 " last_emitted=%u memory=%u",
+                        c, cb->gfx9_fence_va, cb->gfx9_fence_idx, *cb->gfx9_fence_cpu);
+   }
 #endif
 
 #ifndef _WIN32

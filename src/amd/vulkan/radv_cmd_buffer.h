@@ -568,6 +568,9 @@ struct radv_cmd_buffer {
    struct radeon_winsys_bo *gfx9_eop_bug_bo_tmz;
    uint64_t gfx9_fence_va;
    uint32_t gfx9_fence_idx;
+   /* CPU view of gfx9_fence_va (upload BO), for the hang report: tells an EOP that never wrote
+    * its fence from a CP that never saw it. NULL when not CPU-mapped. */
+   volatile const uint32_t *gfx9_fence_cpu;
    uint64_t gfx9_eop_bug_va;
 
    struct set vs_prologs;

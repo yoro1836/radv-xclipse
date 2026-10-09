@@ -92,6 +92,10 @@ struct radv_queue {
    uint64_t last_shader_upload_seq;
    bool sqtt_present;
 
+   /* The command buffers of the submission radv_check_gpu_hangs() is checking (hang report). */
+   struct radv_cmd_buffer *hang_cmd_buffers[8];
+   unsigned hang_cmd_buffer_count;
+
    VkCommandPool utrace_command_pool;
 };
 
