@@ -2008,6 +2008,10 @@ ac_xclipse_dump_kernel(const struct drm_amdgpu_info_device *dev,
    static const char *const props[] = {
       "ro.soc.manufacturer", "ro.soc.model", "ro.board.platform", "ro.hardware",
       "ro.product.model", "ro.build.version.release", "ro.build.version.incremental",
+      /* The switches a bring-up test is likely to flip, so a log says what it ran with. */
+      "debug.radv_xclipse_titan", "debug.radv_xclipse_ctxinit", "debug.radv_xclipse_dcc",
+      "debug.radv_xclipse_dcc_small", "debug.radv_xclipse_gbcfg", "debug.radv_debug",
+      "debug.radv_perftest",
    };
    for (unsigned i = 0; i < ARRAY_SIZE(props); i++) {
       char v[PROP_VALUE_MAX] = {0};

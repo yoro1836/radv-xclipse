@@ -1103,7 +1103,7 @@ static void *
 radv_xclipse_progress_thread(void *arg)
 {
    unsigned generation = 0, t = 0, quiet = 0;
-   uint64_t prev_gfx = UINT64_MAX;
+   uint64_t prev_gfx = UINT64_MAX, prev_reset = 0;
    bool attached = false;
 
    (void)arg;
@@ -1134,25 +1134,32 @@ radv_xclipse_progress_thread(void *arg)
       const uint64_t comp = radv_xclipse_progress.submits[AMDGPU_HW_IP_COMPUTE];
       const uint64_t dma = radv_xclipse_progress.submits[AMDGPU_HW_IP_DMA];
       uint32_t expired = 0;
+      uint64_t reset = 0;
       int ret = -1;
-      if (f.fence)
+      if (f.fence) {
          ret = ac_drm_cs_query_fence_status(ws->dev, radv_xclipse_progress.ctx_handle, f.ip_type, f.ip_instance,
                                             f.ring, f.fence, 0, 0, &expired);
+         /* AMDGPU_CTX_QUERY2_FLAGS_*: 0x1 a GPU reset happened since the context was made,
+          * 0x4 this context's job caused it, 0x20 one is in progress. */
+         if (ac_drm_cs_query_reset_state2(ws->dev, radv_xclipse_progress.ctx_handle, &reset))
+            reset = UINT64_MAX;
+      }
       const uint64_t gtt = p_atomic_read(&ws->alloc_tracker->allocated_gtt);
       const uint64_t vram = p_atomic_read(&ws->alloc_tracker->allocated_vram);
       pthread_mutex_unlock(&radv_xclipse_progress.lock);
 
       /* Every second while anything moves or the latest job is pending, then every 10 s. */
-      const bool moving = gfx != prev_gfx || (f.fence && (ret || !expired));
+      const bool moving = gfx != prev_gfx || (f.fence && (ret || !expired)) || reset != prev_reset;
+      prev_reset = reset;
       quiet = moving ? 0 : quiet + 1;
       prev_gfx = gfx;
       if (moving || quiet % 10 == 0)
          ac_xclipse_id_log(ANDROID_LOG_INFO,
                            "[PROG] dev%u t=%us gfx=%" PRIu64 " compute=%" PRIu64 " dma=%" PRIu64
-                           " gfx_seq=%" PRIu64 " done=%d (ret %d) gtt=%" PRIu64 "MB vram=%" PRIu64
-                           "MB rss=%luMB",
+                           " gfx_seq=%" PRIu64 " done=%d (ret %d) reset=0x%" PRIx64 " gtt=%" PRIu64
+                           "MB vram=%" PRIu64 "MB rss=%luMB",
                            generation, t, gfx, comp, dma, (uint64_t)f.fence, ret ? -1 : (int)expired, ret,
-                           gtt >> 20, vram >> 20, radv_xclipse_rss_mb());
+                           reset, gtt >> 20, vram >> 20, radv_xclipse_rss_mb());
    }
    return NULL;
 }
