@@ -40,6 +40,12 @@
 #define COLOR_YELLOW "\033[1;33m"
 #define COLOR_CYAN   "\033[1;36m"
 
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#include <android/log.h>
+#include "ac_xclipse_log.h"
+#endif
+
 #define RADV_DUMP_DIR "radv_dumps"
 
 static void
@@ -964,15 +970,42 @@ radv_create_dump_dir()
    timep = os_localtime(&raw_time, &result);
    strftime(buf_time, sizeof(buf_time), "%Y.%m.%d_%H.%M.%S", timep);
 
-   /* Hang reports must land where adb can pull them; fall back to HOME if the override can't be
-    * created.
+   /* Hang reports must land where adb can pull them: RADV_XCLIPSE_DUMP_DIR, else
+    * debug.radv_xclipse_dump_dir, else the app's external files directory (an app such as Eden
+    * gets no environment). Fall back to HOME if none can be created.
     */
-   const char *base = getenv("RADV_XCLIPSE_DUMP_DIR");
-   if (base) {
-      snprintf(dump_dir, sizeof(dump_dir), "%s/" RADV_DUMP_DIR "_%d_%s", base, getpid(), buf_time);
-      if (!mkdir(dump_dir, 0774) || errno == EEXIST)
+   char bases[3][320] = {{0}};
+   const char *env = getenv("RADV_XCLIPSE_DUMP_DIR");
+   if (env)
+      snprintf(bases[0], sizeof(bases[0]), "%s", env);
+#ifdef __ANDROID__
+   __system_property_get("debug.radv_xclipse_dump_dir", bases[1]);
+   {
+      char pkg[256] = {0};
+      FILE *c = fopen("/proc/self/cmdline", "r");
+      if (c) {
+         if (fgets(pkg, sizeof(pkg), c)) {
+            char *colon = strchr(pkg, ':');
+            if (colon)
+               *colon = 0;
+         }
+         fclose(c);
+      }
+      if (pkg[0] && strchr(pkg, '.'))
+         snprintf(bases[2], sizeof(bases[2]), "/sdcard/Android/data/%s/files", pkg);
+   }
+#endif
+   for (unsigned i = 0; i < ARRAY_SIZE(bases); i++) {
+      if (!bases[i][0])
+         continue;
+      snprintf(dump_dir, sizeof(dump_dir), "%s/" RADV_DUMP_DIR "_%d_%s", bases[i], getpid(), buf_time);
+      if (!mkdir(dump_dir, 0774) || errno == EEXIST) {
+#ifdef __ANDROID__
+         ac_xclipse_id_log(ANDROID_LOG_ERROR, "[HANG] GPU hang report: %s", dump_dir);
+#endif
          return strdup(dump_dir);
-      fprintf(stderr, "radv: can't create directory '%s' (%i), falling back to HOME.\n", dump_dir, errno);
+      }
+      fprintf(stderr, "radv: can't create directory '%s' (%i).\n", dump_dir, errno);
    }
 
    snprintf(dump_dir, sizeof(dump_dir), "%s/" RADV_DUMP_DIR "_%d_%s", debug_get_option("HOME", "."), getpid(),
@@ -1004,6 +1037,9 @@ radv_check_gpu_hangs(struct radv_queue *queue, const struct radv_winsys_submit_i
    radv_dump_printf_data(device, stderr, false);
 
    fprintf(stderr, "radv: GPU hang detected...\n");
+#ifdef __ANDROID__
+   ac_xclipse_id_log(ANDROID_LOG_ERROR, "[HANG] GPU hang detected, writing the report");
+#endif
 
 #ifndef _WIN32
    const struct radv_physical_device *pdev = radv_device_physical(device);
@@ -1107,6 +1143,9 @@ radv_check_gpu_hangs(struct radv_queue *queue, const struct radv_winsys_submit_i
 
    if (save_hang_report) {
       fprintf(stderr, "radv: GPU hang report saved successfully!\n");
+#ifdef __ANDROID__
+      ac_xclipse_id_log(ANDROID_LOG_ERROR, "[HANG] report saved, aborting");
+#endif
       abort();
    } else {
       char *report;
