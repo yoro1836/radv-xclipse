@@ -39,6 +39,9 @@
 #include "util/u_process.h"
 
 #include "radv_logcat.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 #include "git_sha1.h"
 #include "vk_sync.h"
 
@@ -1454,9 +1457,9 @@ radv_destroy_device(struct radv_device *device, const VkAllocationCallbacks *pAl
    vk_free(&device->vk.alloc, device);
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL
-radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCreateInfo,
-                  const VkAllocationCallbacks *pAllocator, VkDevice *pDevice)
+static VkResult
+radv_create_device(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCreateInfo,
+                   const VkAllocationCallbacks *pAllocator, VkDevice *pDevice)
 {
    VK_FROM_HANDLE(radv_physical_device, pdev, physicalDevice);
    struct radv_instance *instance = radv_physical_device_instance(pdev);
@@ -1746,6 +1749,20 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
 
 fail:
    radv_destroy_device(device, pAllocator);
+   return result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCreateInfo,
+                  const VkAllocationCallbacks *pAllocator, VkDevice *pDevice)
+{
+   VkResult result = radv_create_device(physicalDevice, pCreateInfo, pAllocator, pDevice);
+#ifdef __ANDROID__
+   /* Xclipse bring-up: most failure paths in device creation return without a message. */
+   if (result != VK_SUCCESS)
+      __android_log_print(ANDROID_LOG_ERROR, "RADV_XCLIPSE_ID", "[DEVICE] vkCreateDevice -> %d (%u extensions, %u queue infos)",
+                          result, pCreateInfo->enabledExtensionCount, pCreateInfo->queueCreateInfoCount);
+#endif
    return result;
 }
 

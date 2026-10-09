@@ -23,6 +23,10 @@
 
 #include "vk_instance.h"
 
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
+
 #include "util/libdrm.h"
 #include "util/perf/cpu_trace.h"
 
@@ -417,6 +421,13 @@ enumerate_drm_physical_devices_locked(struct vk_instance *instance)
    drmDevicePtr devices[256];
    int max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
 
+#ifdef __ANDROID__
+   /* Xclipse bring-up: an app that finds no GPU otherwise leaves nothing in logcat. */
+   __android_log_print(max_devices < 1 ? ANDROID_LOG_ERROR : ANDROID_LOG_INFO, "RADV_XCLIPSE_ID",
+                       "[ENUM] drmGetDevices2 -> %d (errno %d)", max_devices,
+                       max_devices < 0 ? -max_devices : 0);
+#endif
+
    if (max_devices < 1)
       return VK_SUCCESS;
 
@@ -424,6 +435,15 @@ enumerate_drm_physical_devices_locked(struct vk_instance *instance)
    for (uint32_t i = 0; i < (uint32_t)max_devices; i++) {
       struct vk_physical_device *pdevice;
       result = instance->physical_devices.try_create_for_drm(instance, devices[i], &pdevice);
+
+#ifdef __ANDROID__
+      __android_log_print(result == VK_SUCCESS ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR,
+                          "RADV_XCLIPSE_ID", "[ENUM] device %u bus=%d nodes=0x%x render=%s -> %d", i,
+                          devices[i]->bustype, devices[i]->available_nodes,
+                          (devices[i]->available_nodes & (1 << DRM_NODE_RENDER))
+                             ? devices[i]->nodes[DRM_NODE_RENDER] : "-",
+                          result);
+#endif
 
       /* Incompatible DRM device, skip. */
       if (result == VK_ERROR_INCOMPATIBLE_DRIVER) {

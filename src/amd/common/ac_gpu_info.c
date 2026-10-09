@@ -176,6 +176,7 @@ ac_titan_regmap_set_level(uint32_t level)
 #include "util/os_misc.h"
 #include "util/format/u_format.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <inttypes.h>
@@ -184,6 +185,7 @@ ac_titan_regmap_set_level(uint32_t level)
 #include <stdlib.h>
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
+#include <sys/utsname.h>
 #endif
 
 /* Which Xclipse is this? pci_id cannot tell: Samsung assigns 0x73A0 to every CHIP_VANGOGH_LITE.
@@ -354,6 +356,30 @@ drmGetFormatModifierName(uint64_t modifier)
 #else
 #include <xf86drm.h>
 #include <unistd.h>
+#endif
+
+#ifdef __ANDROID__
+/* Android discards stderr, and the messages this file prints there are why a GPU was rejected.
+ * Copy them to logcat (tag RADV_XCLIPSE_ID) as well. */
+static int
+ac_fprintf_logcat(FILE *f, const char *fmt, ...)
+{
+   va_list ap;
+   int r;
+
+   if (f == stderr) {
+      char buf[512];
+      va_start(ap, fmt);
+      vsnprintf(buf, sizeof(buf), fmt, ap);
+      va_end(ap);
+      __android_log_write(ANDROID_LOG_ERROR, "RADV_XCLIPSE_ID", buf);
+   }
+   va_start(ap, fmt);
+   r = vfprintf(f, fmt, ap);
+   va_end(ap);
+   return r;
+}
+#define fprintf ac_fprintf_logcat
 #endif
 
 #define CIK_TILE_MODE_COLOR_2D 14
@@ -1955,8 +1981,6 @@ void ac_fill_tess_info(struct radeon_info *info)
 }
 
 #ifdef __ANDROID__
-#include <sys/utsname.h>
-
 /* Xclipse ID dump (logcat -s RADV_XCLIPSE_ID). Printed once per process: always on a model this
  * build is not tuned for (940, UNKNOWN), at debug.radv_xclipse_log >= 1 on the others. Bring-up
  * of a new model starts from it: what the kernel and Android report, raw, then what we derived. */
