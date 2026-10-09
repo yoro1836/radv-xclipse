@@ -6,6 +6,9 @@
  */
 
 #include <assert.h>
+#include <inttypes.h>
+#include <stdio.h>
+#include <unistd.h>
 #include "ac_xclipse_log.h"
 #include <libsync.h>
 #include <pthread.h>
@@ -1066,10 +1069,144 @@ radv_amdgpu_get_bo_list(struct radv_amdgpu_winsys *ws, struct ac_cmdbuf **cs_arr
    return VK_SUCCESS;
 }
 
+/* Xclipse bring-up progress log (ac_xclipse_id_log): once a second for the first minutes, how
+ * many jobs were submitted, whether the latest graphics job has completed, and how much memory the
+ * driver and the process hold. A GPU hang reads as submits stalling with done=0; a leak or a
+ * backlog as memory climbing while submits keep coming. On for models in bring-up (940, UNKNOWN)
+ * and at debug.radv_xclipse_log >= 1. Follows one device at a time, for its first 300 s. */
+#define RADV_XCLIPSE_PROGRESS_SECONDS 300
+
+static struct {
+   pthread_mutex_t lock;
+   bool started, wanted;
+   struct radv_amdgpu_winsys *ws; /* the winsys being watched, NULL between devices */
+   unsigned generation;           /* bumped each time a winsys is attached */
+   uint32_t ctx_handle;
+   struct amdgpu_cs_fence gfx_fence; /* latest GFX submission */
+   uint64_t submits[AMDGPU_HW_IP_NUM + 1];
+} radv_xclipse_progress = {.lock = PTHREAD_MUTEX_INITIALIZER};
+
+static unsigned long
+radv_xclipse_rss_mb(void)
+{
+   unsigned long size = 0, resident = 0;
+   FILE *f = fopen("/proc/self/statm", "r");
+   if (f) {
+      if (fscanf(f, "%lu %lu", &size, &resident) != 2)
+         resident = 0;
+      fclose(f);
+   }
+   return resident * (unsigned long)sysconf(_SC_PAGESIZE) >> 20;
+}
+
+static void *
+radv_xclipse_progress_thread(void *arg)
+{
+   unsigned generation = 0, t = 0, quiet = 0;
+   uint64_t prev_gfx = UINT64_MAX;
+   bool attached = false;
+
+   (void)arg;
+   for (;;) {
+      os_time_sleep(1000000);
+
+      pthread_mutex_lock(&radv_xclipse_progress.lock);
+      struct radv_amdgpu_winsys *ws = radv_xclipse_progress.ws;
+      if (!ws) {
+         pthread_mutex_unlock(&radv_xclipse_progress.lock);
+         if (attached)
+            ac_xclipse_id_log(ANDROID_LOG_INFO, "[PROG] t=%us device destroyed", t);
+         attached = false;
+         continue;
+      }
+      if (!attached || generation != radv_xclipse_progress.generation) {
+         generation = radv_xclipse_progress.generation;
+         attached = true;
+         t = quiet = 0;
+         prev_gfx = UINT64_MAX;
+      }
+      if (++t > RADV_XCLIPSE_PROGRESS_SECONDS) {
+         pthread_mutex_unlock(&radv_xclipse_progress.lock);
+         continue;
+      }
+      const struct amdgpu_cs_fence f = radv_xclipse_progress.gfx_fence;
+      const uint64_t gfx = radv_xclipse_progress.submits[AMDGPU_HW_IP_GFX];
+      const uint64_t comp = radv_xclipse_progress.submits[AMDGPU_HW_IP_COMPUTE];
+      const uint64_t dma = radv_xclipse_progress.submits[AMDGPU_HW_IP_DMA];
+      uint32_t expired = 0;
+      int ret = -1;
+      if (f.fence)
+         ret = ac_drm_cs_query_fence_status(ws->dev, radv_xclipse_progress.ctx_handle, f.ip_type, f.ip_instance,
+                                            f.ring, f.fence, 0, 0, &expired);
+      const uint64_t gtt = p_atomic_read(&ws->alloc_tracker->allocated_gtt);
+      const uint64_t vram = p_atomic_read(&ws->alloc_tracker->allocated_vram);
+      pthread_mutex_unlock(&radv_xclipse_progress.lock);
+
+      /* Every second while anything moves or the latest job is pending, then every 10 s. */
+      const bool moving = gfx != prev_gfx || (f.fence && (ret || !expired));
+      quiet = moving ? 0 : quiet + 1;
+      prev_gfx = gfx;
+      if (moving || quiet % 10 == 0)
+         ac_xclipse_id_log(ANDROID_LOG_INFO,
+                           "[PROG] dev%u t=%us gfx=%" PRIu64 " compute=%" PRIu64 " dma=%" PRIu64
+                           " gfx_seq=%" PRIu64 " done=%d (ret %d) gtt=%" PRIu64 "MB vram=%" PRIu64
+                           "MB rss=%luMB",
+                           generation, t, gfx, comp, dma, (uint64_t)f.fence, ret ? -1 : (int)expired, ret,
+                           gtt >> 20, vram >> 20, radv_xclipse_rss_mb());
+   }
+   return NULL;
+}
+
+static void
+radv_xclipse_progress_note(struct radv_amdgpu_ctx *ctx, const struct radv_amdgpu_cs_request *request)
+{
+   const enum ac_xclipse_model model = ctx->ws->info.xclipse_model;
+   if (model == AC_XCLIPSE_NONE)
+      return;
+
+   pthread_mutex_lock(&radv_xclipse_progress.lock);
+   if (!radv_xclipse_progress.started) {
+      radv_xclipse_progress.started = true;
+      if (model == AC_XCLIPSE_940 || model == AC_XCLIPSE_UNKNOWN || ac_xclipse_log_level() >= 1) {
+         pthread_t thread;
+         if (!pthread_create(&thread, NULL, radv_xclipse_progress_thread, NULL)) {
+            pthread_detach(thread);
+            radv_xclipse_progress.wanted = true;
+         }
+      }
+   }
+   /* Attach the first winsys that submits, and the next one after it is destroyed. */
+   if (radv_xclipse_progress.wanted && !radv_xclipse_progress.ws) {
+      radv_xclipse_progress.ws = ctx->ws;
+      radv_xclipse_progress.generation++;
+      memset(radv_xclipse_progress.submits, 0, sizeof(radv_xclipse_progress.submits));
+      memset(&radv_xclipse_progress.gfx_fence, 0, sizeof(radv_xclipse_progress.gfx_fence));
+   }
+   if (radv_xclipse_progress.ws == ctx->ws) {
+      if (request->ip_type <= AMDGPU_HW_IP_NUM)
+         radv_xclipse_progress.submits[request->ip_type]++;
+      if (request->ip_type == AMDGPU_HW_IP_GFX) {
+         radv_xclipse_progress.ctx_handle = ctx->ctx_handle;
+         radv_xclipse_progress.gfx_fence = ctx->last_submission[request->ip_type][request->ring].fence;
+      }
+   }
+   pthread_mutex_unlock(&radv_xclipse_progress.lock);
+}
+
+void
+radv_xclipse_progress_winsys_destroy(struct radv_amdgpu_winsys *ws)
+{
+   pthread_mutex_lock(&radv_xclipse_progress.lock);
+   if (radv_xclipse_progress.ws == ws)
+      radv_xclipse_progress.ws = NULL;
+   pthread_mutex_unlock(&radv_xclipse_progress.lock);
+}
+
 static void
 radv_assign_last_submit(struct radv_amdgpu_ctx *ctx, struct radv_amdgpu_cs_request *request)
 {
    radv_amdgpu_request_to_fence(ctx, &ctx->last_submission[request->ip_type][request->ring], request);
+   radv_xclipse_progress_note(ctx, request);
 }
 
 static unsigned

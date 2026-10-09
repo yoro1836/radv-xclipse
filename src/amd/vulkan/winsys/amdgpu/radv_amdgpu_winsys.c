@@ -168,6 +168,7 @@ radv_amdgpu_winsys_destroy(struct radeon_winsys *rws)
    /* Nothing freed below may park in the IB cache, and what this winsys parked goes now
     * (radv_xclipse_ibcache_purge_ws()). */
    radv_xclipse_ibcache_winsys_begin_destroy(ws);
+   radv_xclipse_progress_winsys_destroy(ws);
 
    if (ws->info.compiler_info.has_smem_with_null_prt_bug) {
       simple_mtx_destroy(&ws->null_prt_bug.lock);

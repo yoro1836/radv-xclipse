@@ -54,4 +54,7 @@ radv_amdgpu_ctx(struct radeon_winsys_ctx *base)
 
 void radv_amdgpu_cs_init_functions(struct radv_amdgpu_winsys *ws);
 
+/* Stops the Xclipse progress log from querying a winsys that is going away. */
+void radv_xclipse_progress_winsys_destroy(struct radv_amdgpu_winsys *ws);
+
 #endif /* RADV_AMDGPU_CS_H */
