@@ -120,7 +120,8 @@ enum radeon_family
     * grbm_chip_rev is a tier: MOD 0x60 GEN 1 is VIKING, MOD 0x30 GEN 1 is TITAN. Only TITAN is
     * listed: the 920 (MGFX0) is served by CHIP_VANGOGH, and there is no VIKING device to test.
     * TITAN's context register map differs per block (ac_titan_regmap.h). */
-   CHIP_TITAN,          /* Xclipse 530, Exynos 1480  (MGFX1 MID) */
+   CHIP_TITAN,          /* Xclipse 530, Exynos 1480  (MGFX1 MID), and Xclipse 940, Exynos 2400
+                         * (MGFX2): the same register map */
    /* GFX11 (RDNA 3) */
    CHIP_NAVI31,         /* Radeon 7900 */
    CHIP_NAVI32,         /* Radeon 7800, 7700 */
