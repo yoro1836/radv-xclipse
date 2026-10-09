@@ -219,8 +219,8 @@ enum ac_xclipse_model {
    AC_XCLIPSE_920,       /* s5e9925/s5e9935, MGFX0, kernel family VGH(144), 6 CU, 4 L2 */
    AC_XCLIPSE_530,       /* s5e8845, MGFX1_MID, kernel family MGFX(147), 2 CU, 1 L2 */
    AC_XCLIPSE_UNKNOWN,   /* a 0x73A0 whose SoC we do not recognise -- treat conservatively */
-   AC_XCLIPSE_940,       /* s5e9945 (Exynos 2400/2400e), bring-up: recognised from ro.soc.model
-                          * only, runs the UNKNOWN path. chip_rev and kernel family unconfirmed. */
+   AC_XCLIPSE_940,       /* s5e9945 (Exynos 2400), MGFX2 (gen 2 mod 0x60), kernel family MGFX(147),
+                          * 12 CU, 4 L2. Bring-up: otherwise runs the UNKNOWN path. */
 };
 
 const char *ac_xclipse_model_name(enum ac_xclipse_model model);
