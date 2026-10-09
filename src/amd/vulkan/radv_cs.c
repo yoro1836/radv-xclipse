@@ -189,11 +189,18 @@ gfx10_cs_emit_cache_flush(struct radv_cmd_stream *cs, enum amd_gfx_level gfx_lev
          assert(flush_cnt);
          (*flush_cnt)++;
 
+         /* Xclipse 940: the fence below is polled through GL2 on a page the kernel maps NC. Written
+          * to memory, it hung the CP: in every hang report the EOP had completed and the ME's reads
+          * were returning a stale GL2 line. Writing it into GL2 puts it where the poll reads, and
+          * only the CP ever reads this fence. (Polling past GL2 instead stalls the ME on the read
+          * itself, ME_STALLED_ON_ATOMIC_RTN_DATA.) */
+         const unsigned fence_dst = ac_xclipse_flush_fence_l2 ? EOP_DST_SEL_TC_L2 : EOP_DST_SEL_MEM;
+
          radv_cs_emit_write_event_eop(
             cs, gfx_level, cb_db_event,
             S_491_GLM_WB(glm_wb) | S_491_GLM_INV(glm_inv) | S_491_GLV_INV(glv_inv) | S_491_GL1_INV(gl1_inv) |
                S_491_GL2_INV(gl2_inv) | S_491_GL2_WB(gl2_wb) | S_491_SEQ(gcr_seq),
-            EOP_DST_SEL_MEM, EOP_INT_SEL_SEND_DATA_AFTER_WR_CONFIRM, EOP_DATA_SEL_VALUE_32BIT, flush_va, *flush_cnt, 0);
+            fence_dst, EOP_INT_SEL_SEND_DATA_AFTER_WR_CONFIRM, EOP_DATA_SEL_VALUE_32BIT, flush_va, *flush_cnt, 0);
 
          radv_cp_wait_mem(cs, WAIT_REG_MEM_EQUAL, flush_va, *flush_cnt, 0xffffffff);
       }

@@ -46,6 +46,7 @@
 #include "ac_xclipse_log.h"
 #endif
 #include "radv_cmd_buffer.h"
+#include "ac_cmdbuf_cp.h"
 
 #define RADV_DUMP_DIR "radv_dumps"
 
@@ -1048,8 +1049,9 @@ radv_check_gpu_hangs(struct radv_queue *queue, const struct radv_winsys_submit_i
       if (!cb->gfx9_fence_cpu)
          continue;
       ac_xclipse_id_log(ANDROID_LOG_ERROR,
-                        "[HANG] cmdbuf %u fence va=0x%" PRIx64 " last_emitted=%u memory=%u",
-                        c, cb->gfx9_fence_va, cb->gfx9_fence_idx, *cb->gfx9_fence_cpu);
+                        "[HANG] cmdbuf %u fence va=0x%" PRIx64 " last_emitted=%u memory=%u%s",
+                        c, cb->gfx9_fence_va, cb->gfx9_fence_idx, *cb->gfx9_fence_cpu,
+                        ac_xclipse_flush_fence_l2 ? " (fence written to GL2: memory can lag)" : "");
    }
 #endif
 

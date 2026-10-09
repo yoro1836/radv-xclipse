@@ -49,6 +49,9 @@ void
 ac_emit_cp_write_data_imm(struct ac_cmdbuf *cs, unsigned engine_sel,
                           uint64_t va, uint32_t value);
 
+/* Xclipse 940: write CB/DB flush fences into GL2 (radv_cs.c), see ac_cmdbuf_cp.c. */
+extern bool ac_xclipse_flush_fence_l2;
+
 void
 ac_emit_cp_wait_mem(struct ac_cmdbuf *cs, uint64_t va, uint32_t ref,
                     uint32_t mask, unsigned flags);

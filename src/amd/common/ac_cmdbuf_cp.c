@@ -86,24 +86,14 @@ ac_emit_cp_write_data_imm(struct ac_cmdbuf *cs, unsigned engine_sel,
    ac_emit_cp_write_data(cs, engine_sel, V_371_MEMORY, va, 1, &value, false);
 }
 
-/* Xclipse 940 (MGFX2): WAIT_REG_MEM polls memory with CACHE_POLICY=BYPASS. Set once at device
- * init (ac_gpu_info.c); a global like the TITAN register map, since the emitters have no device.
- *
- * Fences live in memory the sgpu kernel maps NC (cached in GL2). The EOP writes them straight to
- * memory (DST_SEL=MEMORY_CONTROLLER) while the ME polls through GL2. In every 940 hang report the
- * EOP had finished (CB/DB clean, no QU stall on EOP done or write confirm, EA/UTCL2/GCRIU idle) and
- * the ME's reads were returning (no ME_WAITING_ON_TC_READ_DATA), yet it never saw the value: a GL2
- * line refilled by a poll between the EOP's GL2 invalidate and its write. The same sequence had
- * completed 6-8 times earlier in each IB. Bypassing GL2 for the poll reads what the EOP wrote. */
-bool ac_xclipse_wait_mem_bypass;
+/* Xclipse 940 (MGFX2): CB/DB flush fences are written into GL2 (see radv_cs.c). Set once at device
+ * init (ac_gpu_info.c); a global like the TITAN register map. */
+bool ac_xclipse_flush_fence_l2;
 
 void
 ac_emit_cp_wait_mem(struct ac_cmdbuf *cs, uint64_t va, uint32_t ref,
                     uint32_t mask, unsigned flags)
 {
-   if (ac_xclipse_wait_mem_bypass)
-      flags |= 3u << 25; /* CACHE_POLICY = BYPASS */
-
    ac_cmdbuf_begin(cs);
    ac_cmdbuf_emit(PKT3(PKT3_WAIT_REG_MEM, 5, 0));
    ac_cmdbuf_emit(WAIT_REG_MEM_MEM_SPACE(1) | flags);

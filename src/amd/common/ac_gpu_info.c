@@ -19,6 +19,7 @@
 #include <android/log.h>
 #include "amdgfxregs.h"
 #include "ac_titan_regmap.h"
+#include "ac_cmdbuf_cp.h"
 
 /* TITAN's register remap is a global: __ac_cmdbuf_set_reg_seq() has no device pointer.
  * See ac_titan_regmap.h. */
@@ -1311,14 +1312,8 @@ ac_identify_chip(struct radeon_info *info, const struct drm_amdgpu_info_device *
       RADV_LOGI("[XCLIPSE] occlusion=%d (from %s)", info->xclipse_occlusion, src);
    }
 
-   /* GL2 coherence of CP fences (ac_cmdbuf_cp.c): RADV_XCLIPSE_WAITBYPASS /
-    * debug.radv_xclipse_waitbypass, default on for the 940. */
-   if (info->xclipse_model != AC_XCLIPSE_NONE) {
-      const char *src = "default";
-      int want = xclipse_knob_int("RADV_XCLIPSE_WAITBYPASS", "debug.radv_xclipse_waitbypass", &src);
-      ac_xclipse_wait_mem_bypass = want >= 0 ? want != 0 : info->xclipse_model == AC_XCLIPSE_940;
-      RADV_LOGI("[XCLIPSE] wait_mem_bypass=%d", ac_xclipse_wait_mem_bypass);
-   }
+   /* CB/DB flush fences go into GL2 on the 940 (radv_cs.c, gfx10_cs_emit_cache_flush). */
+   ac_xclipse_flush_fence_l2 = info->xclipse_model == AC_XCLIPSE_940;
 
    /* Descriptor format (RADV_XCLIPSE_DESCGFX / debug.radv_xclipse_descgfx):
     *      unset -> inherited behaviour
@@ -2035,7 +2030,7 @@ ac_xclipse_dump_kernel(const struct drm_amdgpu_info_device *dev,
       /* The switches a bring-up test is likely to flip, so a log says what it ran with. */
       "debug.radv_xclipse_titan", "debug.radv_xclipse_ctxinit", "debug.radv_xclipse_dcc",
       "debug.radv_xclipse_dcc_small", "debug.radv_xclipse_gbcfg", "debug.radv_debug",
-      "debug.radv_perftest", "debug.radv_xclipse_occ", "debug.radv_xclipse_waitbypass",
+      "debug.radv_perftest", "debug.radv_xclipse_occ",
    };
    for (unsigned i = 0; i < ARRAY_SIZE(props); i++) {
       char v[PROP_VALUE_MAX] = {0};
@@ -2102,10 +2097,10 @@ ac_xclipse_dump_derived(const struct radeon_info *info)
                  info->max_render_backends, (uint64_t)info->enabled_rb_mask, info->num_tcc_blocks,
                  info->max_tcc_blocks, info->l2_cache_size, info->gb_addr_config);
    AC_XCLIPSE_ID("[ID] radv has_clear_state=%d dedicated_vram=%d gart_kb=%u vram_kb=%u rt_ip=%d "
-                 "occlusion=%d wait_bypass=%d",
+                 "occlusion=%d fence_l2=%d",
                  info->has_clear_state, info->has_dedicated_vram, info->gart_size_kb,
                  info->vram_size_kb, info->rt_ip_version, info->xclipse_occlusion,
-                 ac_xclipse_wait_mem_bypass);
+                 ac_xclipse_flush_fence_l2);
    for (unsigned i = 0; i < AMD_NUM_IP_TYPES; i++) {
       if (info->ip[i].num_queues)
          AC_XCLIPSE_ID("[ID] radv ip %s=%u.%u.%u queues=%u", ac_get_ip_type_string(info, i),
