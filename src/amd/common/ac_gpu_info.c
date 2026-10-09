@@ -1241,6 +1241,22 @@ ac_identify_chip(struct radeon_info *info, const struct drm_amdgpu_info_device *
 
    info->desc_gfx_level = info->gfx11_shader_core ? GFX11 : info->gfx_level;
 
+   /* CP DMA L2 prefetches (radv_cp_dma.c): RADV_XCLIPSE_PREFETCH / debug.radv_xclipse_prefetch,
+    * 0 none (default on the 940), 1 on the PFP, 2 on the ME (upstream, default elsewhere).
+    * The 940 hangs on them: a hang report put the CP's stop on the first CP DMA after them that waits
+    * for earlier ones (RAW_WAIT, or a CP_SYNC in its place), with the DMA engine idle and no read
+    * outstanding. On the PFP they still hung once in 100 s. With none, Eden ran without a GPU reset
+    * through repeated resource loads. The vendor driver does not prefetch shaders on the graphics
+    * queue either: Feature::Performance::PipelineShaderPrefetch.methodGfx is a constant Disable (its
+    * methods: Disable, CpDma, PrimeUtcL2; methodCompute is PrimeUtcL2). */
+   info->cp_dma_prefetch = 2;
+   if (info->xclipse_model != AC_XCLIPSE_NONE) {
+      const char *src = "default";
+      int want = xclipse_knob_int("RADV_XCLIPSE_PREFETCH", "debug.radv_xclipse_prefetch", &src);
+      info->cp_dma_prefetch = want >= 0 ? MIN2(want, 2) : info->xclipse_model == AC_XCLIPSE_940 ? 0 : 2;
+      RADV_LOGI("[XCLIPSE] cp_dma_prefetch=%u (from %s)", info->cp_dma_prefetch, src);
+   }
+
    /* Descriptor format (RADV_XCLIPSE_DESCGFX / debug.radv_xclipse_descgfx):
     *      unset -> inherited behaviour
     *      10    -> build descriptors at gfx_level (GFX10_3)

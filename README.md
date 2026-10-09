@@ -48,7 +48,8 @@ The driver works on the Xclipse 920 and the Xclipse 530. Other Xclipse models ar
 for now.
 
 The Xclipse 940 (Exynos 2400, Galaxy S24) is in bring-up: it runs with the Xclipse 530's register
-map, which the S24 kernel headers show it shares, but rendering is untested.
+map, which the S24 kernel headers show it shares. Super Mario Maker 2 in Eden runs on it without GPU
+hangs; other games are untested.
 
 ## Runtime switches
 
@@ -67,6 +68,7 @@ Each switch is an environment variable or, for apps that cannot set one, an Andr
 | `debug.radv_xclipse_fillclear` | | `1` clears a whole render target that has no compression by filling its memory instead of drawing (experimental) |
 | `debug.radv_xclipse_bc5_alias` | `RADV_XCLIPSE_BC5_ALIAS` | `0` stores BC5 textures separately from their converted (EAC) copy again: twice the memory and a slower upload, but copying such a texture back out as BC5 returns the original data |
 | `debug.radv_xclipse_titan` | `RADV_XCLIPSE_TITAN` | Xclipse 530 and 940: `0` stops remapping registers to their layout; lower levels than the default `10` remap only part of it |
+| `debug.radv_xclipse_prefetch` | `RADV_XCLIPSE_PREFETCH` | Shader and vertex-descriptor prefetches into the GPU cache: `0` none (default on the 940, where they hang the GPU, and what the vendor driver does), `1` issued from the command fetcher, `2` issued from the main command engine (default elsewhere) |
 | `debug.radv_xclipse_pace` | `RADV_XCLIPSE_PACE` | Xclipse 920 only: `0` stops holding back the app's GPU work when it runs uncapped (vsync off), which otherwise keeps the Android UI responsive; `2` holds it back even for short jobs |
 | `debug.mesa_xclipse_prof` | `MESA_XCLIPSE_PROF` | `<delay>,<seconds>` profiles CPU and GPU time per frame and per render pass, then writes `mesa_prof_<pid>.txt` to `MESA_XCLIPSE_PROF_DIR` or the app's `Android/data/<package>/files`. `t,<seconds>` instead profiles `<seconds>` each time `debug.mesa_xclipse_prof_go` changes (`t,<seconds>,g` without CPU sampling), writes to `debug.mesa_xclipse_prof_dir` if set, and also prints the summary to logcat (tag `XPROF`) |
 

@@ -273,6 +273,9 @@ struct radeon_info {
    enum amd_gfx_level desc_gfx_level;
    /* Which Xclipse. pci_id is 0x73A0 on all of them: key model-specific tuning on this. */
    enum ac_xclipse_model xclipse_model;
+   /* L2 prefetches by CP DMA (radv_cp_dma.c): 0 none (the Xclipse vendor driver's choice for
+    * graphics), 1 on the PFP, 2 on the ME (upstream). */
+   uint8_t cp_dma_prefetch;
    uint32_t family_id;
    uint32_t chip_external_rev;
    uint32_t chip_rev; /* 0 = A0, 1 = A1, etc. */

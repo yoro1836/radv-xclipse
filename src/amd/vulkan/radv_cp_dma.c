@@ -156,6 +156,13 @@ radv_cs_cp_dma_prefetch(const struct radv_device *device, struct radv_cmd_stream
    enum amd_gfx_level gfx_level = pdev->info.gfx_level;
    uint32_t header = 0, command = 0;
 
+   /* Xclipse 940: no prefetch, as the vendor driver on the graphics queue, or one on the PFP
+    * (cp_dma_prefetch). */
+   if (!pdev->info.cp_dma_prefetch)
+      return;
+   if (pdev->info.cp_dma_prefetch == 1 && cs->hw_ip == AMD_IP_GFX)
+      header |= S_501_ENGINE(V_501_PFP);
+
    if (gfx_level >= GFX11)
       size = MIN2(size, 32768 - SI_CPDMA_ALIGNMENT);
 
