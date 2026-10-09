@@ -639,7 +639,7 @@ radv_emit_ge_rings(struct radv_device *device, struct radv_cmd_stream *cs, struc
  * would stay unwritten. The table is the vendor's init programming observed at runtime (not the
  * GPL kernel clearstate). Emitted first, so everything else overrides it.
  *   RADV_XCLIPSE_CTXINIT / debug.radv_xclipse_ctxinit:
- *     0 = off, CLEAR_STATE allowed   1 = on, no CLEAR_STATE (530 default)
+ *     0 = off, CLEAR_STATE allowed   1 = on, no CLEAR_STATE (530 and 940 default)
  *     2 = off, still no CLEAR_STATE
  *   Returns the raw mode, not a bool. */
 static int
@@ -658,7 +658,11 @@ radv_xclipse_ctxinit_mode(const struct radv_physical_device *pdev)
             want = atoi(v);
       }
 #endif
-      cached = want >= 0 ? want : (pdev->info.xclipse_model == AC_XCLIPSE_530 ? 1 : 0);
+      /* sgpu skips the clear state for every AMDGPU_FAMILY_MGFX part (gfx_v10_0_rlc_init and
+       * gfx_v10_0_cp_gfx_start): the 530 and the 940 alike. */
+      cached = want >= 0 ? want
+                         : (pdev->info.xclipse_model == AC_XCLIPSE_530 ||
+                            pdev->info.xclipse_model == AC_XCLIPSE_940 ? 1 : 0);
       RADV_LOGI("[XCLIPSE] ctx_init=%d (model=%d, %u regs)", cached,
                 pdev->info.xclipse_model, (unsigned)ARRAY_SIZE(ac_xclipse_ctx_init));
    }
@@ -673,7 +677,7 @@ radv_xclipse_needs_ctx_init(const struct radv_physical_device *pdev)
 
 /* Whether a CLEAR_STATE packet may be sent (separate from the context init):
  *   0  no context init, CLEAR_STATE allowed      (upstream; unstable on the 530)
- *   1  context init every submit, no CLEAR_STATE (530 default)
+ *   1  context init every submit, no CLEAR_STATE (530 and 940 default)
  *   2  no context init, no CLEAR_STATE
  */
 static bool
