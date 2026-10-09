@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package a stripped driver as an adrenotools-style zip: meta.json, vulkan.radeon.so and the
+"""Package a stripped driver as an adrenotools-style zip: meta.json, vulkan.radeon.<commit>.so and the
 third-party notices (NOTICE.txt).
 
 usage: package.py <stripped vulkan.radeon.so> <output dir>
@@ -76,11 +76,16 @@ def main():
         'libraryName': 'vulkan.radeon.so',
     }
 
+    # The library is named after the commit: emulators keep the previously extracted
+    # vulkan.radeon.so and kept loading an old build after a new zip was installed.
+    library = 'vulkan.radeon%s.so' % ('.' + commit if commit else '')
+    meta['libraryName'] = library
+
     os.makedirs(out_dir, exist_ok=True)
     zip_path = os.path.join(out_dir, 'radv-xclipse-%s%s.zip' % (mesa_version, suffix))
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('meta.json', json.dumps(meta, indent=2) + '\n')
-        z.write(lib, 'vulkan.radeon.so')
+        z.write(lib, library)
         z.write(os.path.join(ROOT, 'android', 'NOTICE.txt'), 'NOTICE.txt')
     print('packaged %s (%s, %.1f MB)' % (zip_path, vulkan, os.path.getsize(zip_path) / 1e6))
 

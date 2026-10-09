@@ -39,7 +39,7 @@ build.cmd C:\path\to\android-ndk     # Windows
 
 The NDK path can also come from `ANDROID_NDK_HOME` or `ANDROID_NDK_ROOT`. The build goes to
 `build-android/` (set `BUILD_DIR` to change it). The script builds the driver, strips it, and
-writes a package to `dist/`: a zip with `meta.json`, `vulkan.radeon.so` and `NOTICE.txt`, for
+writes a package to `dist/`: a zip with `meta.json`, `vulkan.radeon.<commit>.so` and `NOTICE.txt`, for
 emulators that load custom Vulkan drivers from a zip.
 
 ## Compatibility
