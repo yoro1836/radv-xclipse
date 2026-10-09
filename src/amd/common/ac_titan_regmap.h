@@ -19,6 +19,10 @@
  *
  * VGT_GS_OUT_PRIM_TYPE moves from CONTEXT 0x29b to UCONFIG 0x241 (a space change, not a dword
  * remap); it is handled at its emission site.
+ *
+ * The Xclipse 940 (MGFX2) shares the map: diffing the S24 kernel's gc_10_4_0_offset_m2.h against
+ * gc_10_4_0_offset_m1.h by register name moves no context, SH or UCONFIG register; M2 only adds
+ * GL2C_YUVWRAP_CONTROL/STATUS and fields in bits M1 reserved (PA_RATE_CNTL, CP_DMA_*_CONTROL).
  */
 #ifndef AC_TITAN_REGMAP_H
 #define AC_TITAN_REGMAP_H

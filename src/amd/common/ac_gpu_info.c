@@ -1176,17 +1176,19 @@ ac_identify_chip(struct radeon_info *info, const struct drm_amdgpu_info_device *
       return false;
    }
 
-   /* CHIP_TITAN: the 530 as its own family (RADV_XCLIPSE_TITAN).
+   /* CHIP_TITAN: the 530 and the 940 as their own family (RADV_XCLIPSE_TITAN).
     * TITAN is its AMD codename (MGFX_MOD 0x30 = AMDGPU_IS_MGFX1_MID; the 920 is MOD 0x60 GEN 0,
     * VOYAGER). Its context register map differs per block (ac_titan_regmap.h). gfx_level stays
     * GFX10_3; the GFX11 shader core is carried by gfx11_shader_core. */
-   if (info->xclipse_model == AC_XCLIPSE_530) {
+   if (info->xclipse_model == AC_XCLIPSE_530 || info->xclipse_model == AC_XCLIPSE_940) {
       const char *tsrc = "default";
       int twant = xclipse_knob_int("RADV_XCLIPSE_TITAN", "debug.radv_xclipse_titan", &tsrc);
 
       /* Default on at level 10: level 0 wedges the GPU on the first draw. Level 10 (DB table) is
-       * needed for stencil. Depth writes are still broken at both 9 and 10. Only reached on the
-       * 530. 0 = off; lower levels bisect a regression to a block. */
+       * needed for stencil. Depth writes are still broken at both 9 and 10. 0 = off; lower levels
+       * bisect a regression to a block.
+       * The 940 (MGFX2) takes it too: gc_10_4_0_offset_m2.h places every context, SH and UCONFIG
+       * register exactly where gc_10_4_0_offset_m1.h does. */
       if (twant < 0)
          twant = 10;
 
