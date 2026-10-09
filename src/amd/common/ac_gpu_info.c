@@ -1320,6 +1320,10 @@ ac_identify_chip(struct radeon_info *info, const struct drm_amdgpu_info_device *
       ac_xclipse_wait_mem_bypass = want >= 0 ? want != 0 : info->xclipse_model == AC_XCLIPSE_940;
       want = xclipse_knob_int("RADV_XCLIPSE_EOPL2", "debug.radv_xclipse_eopl2", &src);
       ac_xclipse_eop_via_l2 = want > 0;
+      /* An EOP that writes into GL2 is never seen by a poll that bypasses it: the S24 hung on the
+       * first fence with both on (memory still 0). EOPL2 takes the poll back through GL2. */
+      if (ac_xclipse_eop_via_l2)
+         ac_xclipse_wait_mem_bypass = false;
       RADV_LOGI("[XCLIPSE] wait_mem_bypass=%d eop_via_l2=%d", ac_xclipse_wait_mem_bypass,
                 ac_xclipse_eop_via_l2);
    }
