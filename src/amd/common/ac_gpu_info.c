@@ -191,6 +191,7 @@ ac_titan_regmap_set_level(uint32_t level)
  *
  *     s5e9925 (S22U, Xclipse 920)  chip_rev 0x00600201  gen 0 mod 0x60  kernel family 144 VGH
  *     s5e8845 (A55,  Xclipse 530)  chip_rev 0x01300100  gen 1 mod 0x30  kernel family 147 MGFX
+ *     s5e9945 (S24,  Xclipse 940)  chip_rev not yet measured: recognised from ro.soc.model only
  *
  * On disagreement chip_rev wins and it is logged. Reports the decision and its source. */
 #define AC_MGFX_GEN(rev) (((rev) >> 24) & 0xff)
@@ -252,6 +253,23 @@ xclipse_knob_int(const char *env_name, const char *prop_name, const char **src_o
    return -1;
 }
 
+const char *
+ac_xclipse_model_name(enum ac_xclipse_model model)
+{
+   switch (model) {
+   case AC_XCLIPSE_NONE:
+      return "none";
+   case AC_XCLIPSE_920:
+      return "920";
+   case AC_XCLIPSE_530:
+      return "530";
+   case AC_XCLIPSE_940:
+      return "940";
+   default:
+      return "UNKNOWN";
+   }
+}
+
 static enum ac_xclipse_model
 ac_model_from_chip_rev(uint32_t chip_rev)
 {
@@ -286,6 +304,8 @@ ac_detect_xclipse_model(uint32_t device_id, uint32_t chip_rev)
          from_soc = AC_XCLIPSE_920;
       else if (!strcmp(soc, "s5e8845"))
          from_soc = AC_XCLIPSE_530;
+      else if (!strcmp(soc, "s5e9945"))
+         from_soc = AC_XCLIPSE_940;
 
       if (from_soc != AC_XCLIPSE_UNKNOWN && from_rev != AC_XCLIPSE_UNKNOWN &&
           from_soc != from_rev) {
@@ -297,8 +317,7 @@ ac_detect_xclipse_model(uint32_t device_id, uint32_t chip_rev)
    }
 
    RADV_LOGI("[XCLIPSE] model=%s soc='%s' (from %s) chip_rev=0x%08x gen=%u mod=0x%02x",
-             model == AC_XCLIPSE_920 ? "920" : model == AC_XCLIPSE_530 ? "530" : "UNKNOWN",
-             soc[0] ? soc : "?", src, chip_rev,
+             ac_xclipse_model_name(model), soc[0] ? soc : "?", src, chip_rev,
              AC_MGFX_GEN(chip_rev), AC_MGFX_MOD(chip_rev));
    return model;
 }
@@ -777,10 +796,24 @@ static const uint32_t ac_ip_type_dw_padding_minus_1[AMD_NUM_IP_TYPES] = {
     [AMD_IP_VPE]      = 0xf,
 };
 
+/* What the kernel reported per IP, before the fixups below: the Xclipse ID dump prints it. */
+static struct {
+   bool valid;
+   uint32_t major, minor, discovery, rings;
+} ac_xclipse_raw_ip[AMD_NUM_IP_TYPES];
+
 bool
 ac_fill_hw_ip_info(struct radeon_info *info, const struct drm_amdgpu_info_device *device_info,
                    unsigned ip_type, const struct drm_amdgpu_info_hw_ip *ip_info)
 {
+   if (device_info->device_id == 0x73a0 && ip_type < AMD_NUM_IP_TYPES) {
+      ac_xclipse_raw_ip[ip_type].valid = true;
+      ac_xclipse_raw_ip[ip_type].major = ip_info->hw_ip_version_major;
+      ac_xclipse_raw_ip[ip_type].minor = ip_info->hw_ip_version_minor;
+      ac_xclipse_raw_ip[ip_type].discovery = ip_info->ip_discovery_version;
+      ac_xclipse_raw_ip[ip_type].rings = ip_info->available_rings;
+   }
+
    if (info->userq_ip_mask & BITFIELD_BIT(ip_type)) {
       /* info[ip_type].num_queues variable is also used to describe if that ip_type is
        * supported or not. Setting this variable to 1 for userqueues.
@@ -1171,15 +1204,17 @@ ac_identify_chip(struct radeon_info *info, const struct drm_amdgpu_info_device *
     * TITAN is its AMD codename (MGFX_MOD 0x30 = AMDGPU_IS_MGFX1_MID; the 920 is MOD 0x60 GEN 0,
     * VOYAGER). Its context register map differs per block (ac_titan_regmap.h). gfx_level stays
     * GFX10_3; the GFX11 shader core is carried by gfx11_shader_core. */
-   if (info->xclipse_model == AC_XCLIPSE_530) {
+   if (info->xclipse_model == AC_XCLIPSE_530 || info->xclipse_model == AC_XCLIPSE_940) {
       const char *tsrc = "default";
       int twant = xclipse_knob_int("RADV_XCLIPSE_TITAN", "debug.radv_xclipse_titan", &tsrc);
 
       /* Default on at level 10: level 0 wedges the GPU on the first draw. Level 10 (DB table) is
-       * needed for stencil. Depth writes are still broken at both 9 and 10. Only reached on the
-       * 530. 0 = off; lower levels bisect a regression to a block. */
+       * needed for stencil. Depth writes are still broken at both 9 and 10. 0 = off; lower levels
+       * bisect a regression to a block.
+       * The 940 only takes it when asked: the map comes from the MGFX1 offset header
+       * (gc_10_4_0_offset_m1.h), and whether the 940 shares that layout is what the switch tests. */
       if (twant < 0)
-         twant = 10;
+         twant = info->xclipse_model == AC_XCLIPSE_530 ? 10 : 0;
 
       if (twant > 0) {
          const char *ssrc = "default";
@@ -1919,6 +1954,106 @@ void ac_fill_tess_info(struct radeon_info *info)
    info->total_tess_ring_size = info->tess_offchip_ring_size + info->tess_factor_ring_size;
 }
 
+#ifdef __ANDROID__
+#include <sys/utsname.h>
+
+/* Xclipse ID dump (logcat -s RADV_XCLIPSE_ID). Printed once per process: always on a model this
+ * build is not tuned for (940, UNKNOWN), at debug.radv_xclipse_log >= 1 on the others. Bring-up
+ * of a new model starts from it: what the kernel and Android report, raw, then what we derived. */
+#define AC_XCLIPSE_ID(...) __android_log_print(ANDROID_LOG_INFO, "RADV_XCLIPSE_ID", __VA_ARGS__)
+
+static bool
+ac_xclipse_id_wanted(enum ac_xclipse_model model)
+{
+   return model == AC_XCLIPSE_940 || model == AC_XCLIPSE_UNKNOWN || ac_xclipse_log_level() >= 1;
+}
+
+static void
+ac_xclipse_dump_kernel(const struct drm_amdgpu_info_device *dev,
+                       const struct amdgpu_gpu_info *amdinfo)
+{
+   static const char *const props[] = {
+      "ro.soc.manufacturer", "ro.soc.model", "ro.board.platform", "ro.hardware",
+      "ro.product.model", "ro.build.version.release", "ro.build.version.incremental",
+   };
+   for (unsigned i = 0; i < ARRAY_SIZE(props); i++) {
+      char v[PROP_VALUE_MAX] = {0};
+      __system_property_get(props[i], v);
+      AC_XCLIPSE_ID("[ID] prop %s=%s", props[i], v[0] ? v : "?");
+   }
+
+   struct utsname u;
+   if (!uname(&u))
+      AC_XCLIPSE_ID("[ID] kernel %s %s", u.release, u.version);
+
+   AC_XCLIPSE_ID("[ID] dev device_id=0x%04x chip_rev=0x%08x (gen=%u mod=0x%02x) external_rev=0x%x "
+                 "pci_rev=0x%x family=%u ids_flags=0x%" PRIx64,
+                 dev->device_id, dev->chip_rev, AC_MGFX_GEN(dev->chip_rev),
+                 AC_MGFX_MOD(dev->chip_rev), dev->external_rev, dev->pci_rev, dev->family,
+                 (uint64_t)dev->ids_flags);
+   AC_XCLIPSE_ID("[ID] dev se=%u sa_per_se=%u cu_active=%u cu_per_sh=%u cu_ao_mask=0x%x tcc=%u "
+                 "rb_pipes=%u rb_mask=0x%x wave=%u vgprs=%u",
+                 dev->num_shader_engines, dev->num_shader_arrays_per_engine,
+                 dev->cu_active_number, dev->num_cu_per_sh, dev->cu_ao_mask, dev->num_tcc_blocks,
+                 dev->num_rb_pipes, dev->enabled_rb_pipes_mask, dev->wave_front_size,
+                 dev->num_shader_visible_vgprs);
+   for (unsigned se = 0; se < 4; se++) {
+      AC_XCLIPSE_ID("[ID] dev cu_bitmap[%u]=%08x %08x %08x %08x ao=%08x %08x %08x %08x", se,
+                    dev->cu_bitmap[se][0], dev->cu_bitmap[se][1], dev->cu_bitmap[se][2],
+                    dev->cu_bitmap[se][3], dev->cu_ao_bitmap[se][0], dev->cu_ao_bitmap[se][1],
+                    dev->cu_ao_bitmap[se][2], dev->cu_ao_bitmap[se][3]);
+   }
+   AC_XCLIPSE_ID("[ID] dev sclk_max=%" PRIu64 " mclk_max=%" PRIu64 " vram_type=%u vram_bits=%u "
+                 "gl2c=%u tcp=%u sqc_per_wgp=%u sqc_data=%u mall=%" PRIu64,
+                 (uint64_t)dev->max_engine_clock, (uint64_t)dev->max_memory_clock,
+                 dev->vram_type, dev->vram_bit_width, dev->gl2c_cache_size, dev->tcp_cache_size,
+                 dev->num_sqc_per_wgp, dev->sqc_data_cache_size, (uint64_t)dev->mall_size);
+   AC_XCLIPSE_ID("[ID] dev gs_vgt_table_depth=%u gs_prim_buffer_depth=%u max_gs_waves_per_vgt=%u "
+                 "ce_ram=%u hw_gfx_contexts=%u",
+                 dev->gs_vgt_table_depth, dev->gs_prim_buffer_depth, dev->max_gs_waves_per_vgt,
+                 dev->ce_ram_size, dev->num_hw_gfx_contexts);
+   AC_XCLIPSE_ID("[ID] dev va=0x%" PRIx64 "..0x%" PRIx64 " high_va=0x%" PRIx64 "..0x%" PRIx64,
+                 (uint64_t)dev->virtual_address_offset, (uint64_t)dev->virtual_address_max,
+                 (uint64_t)dev->high_va_offset, (uint64_t)dev->high_va_max);
+   if (amdinfo)
+      AC_XCLIPSE_ID("[ID] dev gb_addr_cfg=0x%08x mc_arb_ramcfg=0x%08x", amdinfo->gb_addr_cfg,
+                    amdinfo->mc_arb_ramcfg);
+   for (unsigned i = 0; i < AMD_NUM_IP_TYPES; i++) {
+      if (ac_xclipse_raw_ip[i].valid && ac_xclipse_raw_ip[i].rings)
+         AC_XCLIPSE_ID("[ID] ip %u kernel=%u.%u discovery=0x%06x rings=0x%x", i,
+                       ac_xclipse_raw_ip[i].major, ac_xclipse_raw_ip[i].minor,
+                       ac_xclipse_raw_ip[i].discovery, ac_xclipse_raw_ip[i].rings);
+   }
+}
+
+static void
+ac_xclipse_dump_derived(const struct radeon_info *info)
+{
+   AC_XCLIPSE_ID("[ID] radv model=%s family=%s family_id=%u gfx_level=%d desc_gfx_level=%d "
+                 "gfx11_shader_core=%d titan_level=%u drm=%u.%u.%u",
+                 ac_xclipse_model_name(info->xclipse_model), ac_get_family_name(info->family),
+                 info->family_id, info->gfx_level, info->desc_gfx_level, info->gfx11_shader_core,
+                 ac_titan_regmap_level, info->drm_major, info->drm_minor, info->drm_patchlevel);
+   AC_XCLIPSE_ID("[ID] radv se=%u/%u sa_per_se=%u cu=%u cu_per_sa=%u..%u rb=%u/%u rb_mask=0x%" PRIx64
+                 " tcc=%u/%u l2=%u gb_addr_config=0x%08x",
+                 info->num_se, info->max_se, info->max_sa_per_se, info->num_cu,
+                 info->min_good_cu_per_sa, info->max_good_cu_per_sa, info->num_rb,
+                 info->max_render_backends, (uint64_t)info->enabled_rb_mask, info->num_tcc_blocks,
+                 info->max_tcc_blocks, info->l2_cache_size, info->gb_addr_config);
+   AC_XCLIPSE_ID("[ID] radv has_clear_state=%d dedicated_vram=%d gart_kb=%u vram_kb=%u rt_ip=%d",
+                 info->has_clear_state, info->has_dedicated_vram, info->gart_size_kb,
+                 info->vram_size_kb, info->rt_ip_version);
+   for (unsigned i = 0; i < AMD_NUM_IP_TYPES; i++) {
+      if (info->ip[i].num_queues)
+         AC_XCLIPSE_ID("[ID] radv ip %s=%u.%u.%u queues=%u", ac_get_ip_type_string(info, i),
+                       info->ip[i].ver_major, info->ip[i].ver_minor, info->ip[i].ver_rev,
+                       info->ip[i].num_queues);
+   }
+   if (info->xclipse_model == AC_XCLIPSE_940 || info->xclipse_model == AC_XCLIPSE_UNKNOWN)
+      AC_XCLIPSE_ID("[ID] this Xclipse is in bring-up: rendering is untested");
+}
+#endif
+
 enum ac_query_gpu_info_result
 ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
                   bool require_pci_bus_info, bool compiler_compat_mode)
@@ -2064,8 +2199,17 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       return AC_QUERY_GPU_INFO_FAIL;
    }
 
-   if (!ac_identify_chip(info, &device_info))
+   if (!ac_identify_chip(info, &device_info)) {
+#ifdef __ANDROID__
+      /* An Xclipse whose kernel family we do not know: dump what it reports before giving up. */
+      if (device_info.device_id == 0x73a0) {
+         ac_xclipse_dump_kernel(&device_info, &amdinfo);
+         AC_XCLIPSE_ID("[ID] unknown (family, external_rev) = (%u, 0x%x): no device",
+                       device_info.family, device_info.external_rev);
+      }
+#endif
       return AC_QUERY_GPU_INFO_UNIMPLEMENTED_HW;
+   }
 
    const char *marketing_name = ac_drm_get_marketing_name(dev);
    strncpy(info->marketing_name, marketing_name ? marketing_name : "AMD Unknown", sizeof(info->marketing_name));
@@ -2311,6 +2455,17 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
          exit(0);
       }
    }
+
+#ifdef __ANDROID__
+   if (info->xclipse_model != AC_XCLIPSE_NONE && ac_xclipse_id_wanted(info->xclipse_model)) {
+      static bool dumped;
+      if (!dumped) {
+         dumped = true;
+         ac_xclipse_dump_kernel(&device_info, &amdinfo);
+         ac_xclipse_dump_derived(info);
+      }
+   }
+#endif
    return AC_QUERY_GPU_INFO_SUCCESS;
 }
 
