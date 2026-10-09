@@ -191,6 +191,7 @@ ac_titan_regmap_set_level(uint32_t level)
  *
  *     s5e9925 (S22U, Xclipse 920)  chip_rev 0x00600201  gen 0 mod 0x60  kernel family 144 VGH
  *     s5e8845 (A55,  Xclipse 530)  chip_rev 0x01300100  gen 1 mod 0x30  kernel family 147 MGFX
+ *     s5e9945 (S24,  Xclipse 940)  chip_rev 0x02600200  gen 2 mod 0x60  kernel family 147 MGFX
  *
  * On disagreement chip_rev wins and it is logged. Reports the decision and its source. */
 #define AC_MGFX_GEN(rev) (((rev) >> 24) & 0xff)
@@ -259,6 +260,8 @@ ac_model_from_chip_rev(uint32_t chip_rev)
       return AC_XCLIPSE_920;
    if (AC_MGFX_GEN(chip_rev) == 1 && AC_MGFX_MOD(chip_rev) == 0x30)
       return AC_XCLIPSE_530;
+   if (AC_MGFX_GEN(chip_rev) == 2 && AC_MGFX_MOD(chip_rev) == 0x60)
+      return AC_XCLIPSE_940;
    return AC_XCLIPSE_UNKNOWN;
 }
 
@@ -286,6 +289,8 @@ ac_detect_xclipse_model(uint32_t device_id, uint32_t chip_rev)
          from_soc = AC_XCLIPSE_920;
       else if (!strcmp(soc, "s5e8845"))
          from_soc = AC_XCLIPSE_530;
+      else if (!strcmp(soc, "s5e9945"))
+         from_soc = AC_XCLIPSE_940;
 
       if (from_soc != AC_XCLIPSE_UNKNOWN && from_rev != AC_XCLIPSE_UNKNOWN &&
           from_soc != from_rev) {
@@ -297,7 +302,8 @@ ac_detect_xclipse_model(uint32_t device_id, uint32_t chip_rev)
    }
 
    RADV_LOGI("[XCLIPSE] model=%s soc='%s' (from %s) chip_rev=0x%08x gen=%u mod=0x%02x",
-             model == AC_XCLIPSE_920 ? "920" : model == AC_XCLIPSE_530 ? "530" : "UNKNOWN",
+             model == AC_XCLIPSE_920 ? "920" : model == AC_XCLIPSE_530 ? "530" :
+             model == AC_XCLIPSE_940 ? "940" : "UNKNOWN",
              soc[0] ? soc : "?", src, chip_rev,
              AC_MGFX_GEN(chip_rev), AC_MGFX_MOD(chip_rev));
    return model;
@@ -1089,8 +1095,11 @@ ac_identify_chip(struct radeon_info *info, const struct drm_amdgpu_info_device *
       case FAMILY_MGFX:
          /* Samsung Xclipse 530 and up: same shader core as the 920 (fewer CUs and L2 slices, both
           * read from the kernel). external_rev is 0x0A (0x80 on the 920); AMDGPU_VANGOGH_RANGE
-          * (0x01..0xFF) matches both. */
+          * (0x01..0xFF) matches both. The 940 reports its chip_rev there (0x02600200), outside
+          * any range: FAMILY_MGFX is only ever an Xclipse, so take it as Van Gogh regardless. */
          identify_chip(VANGOGH);
+         if (info->family == CHIP_UNKNOWN)
+            info->family = CHIP_VANGOGH;
          break;
       case FAMILY_RMB:
          identify_chip(REMBRANDT);
@@ -1379,6 +1388,10 @@ ac_identify_chip(struct radeon_info *info, const struct drm_amdgpu_info_device *
    if (info->family_id == FAMILY_MGFX)
       info->family_id = FAMILY_VGH;
    info->chip_external_rev = device_info->external_rev;
+   /* addrlib checks the revision against AMDGPU_VANGOGH_RANGE too (and sets RB+ from it): give the
+    * 940's out-of-range value (its chip_rev) the 920's. */
+   if (device_info->family == FAMILY_MGFX && !ASICREV_IS(info->chip_external_rev, VANGOGH))
+      info->chip_external_rev = 0x80;
    info->chip_rev = device_info->chip_rev;
 
    return true;

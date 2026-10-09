@@ -47,6 +47,9 @@ emulators that load custom Vulkan drivers from a zip.
 The driver works on the Xclipse 920 and the Xclipse 530. Other Xclipse models are not compatible
 for now.
 
+The Xclipse 940 (Exynos 2400, Galaxy S24) is in bring-up: the driver recognises it, but rendering is
+untested.
+
 ## Runtime switches
 
 Each switch is an environment variable or, for apps that cannot set one, an Android property.
