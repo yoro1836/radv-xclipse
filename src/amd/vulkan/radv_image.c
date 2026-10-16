@@ -2021,6 +2021,19 @@ radv_BindImageMemory2(VkDevice _device, uint32_t bindInfoCount, const VkBindImag
       }
 #endif
 
+#if DETECT_OS_ANDROID
+      /* The Android platform loader binds swapchain images with memory == VK_NULL_HANDLE. */
+      if (!mem && ac_xclipse_log_level() >= 1) {
+         char chain[256] = {0};
+         size_t len = 0;
+         for (const VkBaseInStructure *s = pBindInfos[i].pNext; s && len < sizeof(chain) - 16; s = s->pNext)
+            len += snprintf(chain + len, sizeof(chain) - len, " %d", (int)s->sType);
+         mesa_logi("[BIND_NULL_MEM] image %ux%u fmt=%d tiling=%d usage=0x%x, pNext sTypes:%s",
+                   image->vk.extent.width, image->vk.extent.height, (int)image->vk.format, (int)image->vk.tiling,
+                   (unsigned)image->vk.usage, chain);
+      }
+#endif
+
       const VkBindImagePlaneMemoryInfo *plane_info = NULL;
       uint32_t bind_idx = 0;
 
