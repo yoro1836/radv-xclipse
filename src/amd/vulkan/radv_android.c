@@ -90,33 +90,28 @@ radv_anb_derive_stride_bytes(const native_handle_t *hnd, const VkImageCreateInfo
    return 0;
 }
 
-VkResult
-radv_image_from_gralloc(VkDevice device_h, const VkImageCreateInfo *base_info,
-                        const VkNativeBufferANDROID *gralloc_info, const VkAllocationCallbacks *alloc,
-                        VkImage *out_image_h)
-
+/* Import the dma-buf of a gralloc buffer as a device memory object.
+ *
+ * 1) handle->numFds is about the number of plane(s) and metadata(optional) fd in a
+ * gralloc buf handle. amdgpu backend of gralloc should make sure all plane bufs
+ * in same dma_buf fd but different offset. Meanwhile, metadata fd is not necessary
+ * till radv needs to support U_GRALLOC_TYPE_GRALLOC4 or higher version GRALLOC.
+ *
+ * 2) Do not close the gralloc handle's dma_buf. The lifetime of the dma_buf
+ * must exceed that of the gralloc handle, and we do not own the gralloc
+ * handle. The import gets its own duplicate.
+ */
+static VkResult
+radv_import_gralloc_memory(VkDevice device_h, const VkNativeBufferANDROID *gralloc_info,
+                           const VkAllocationCallbacks *alloc, VkDeviceMemory *out_memory_h)
 {
    VK_FROM_HANDLE(radv_device, device, device_h);
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   VkImage image_h = VK_NULL_HANDLE;
-   struct radv_image *image = NULL;
-   VkResult result;
 
-   /* 1) handle->numFds is about the number of plane(s) and metadata(optional) fd in a
-    * gralloc buf handle. amdgpu backend of gralloc should make sure all plane bufs
-    * in same dma_buf fd but different offset. Meanwhile, metadata fd is not necessary
-    * till radv needs to support U_GRALLOC_TYPE_GRALLOC4 or higher version GRALLOC.
-    *
-    * 2) Do not close the gralloc handle's dma_buf. The lifetime of the dma_buf
-    * must exceed that of the gralloc handle, and we do not own the gralloc
-    * handle.
-    */
    int dma_buf = gralloc_info->handle->data[0];
    assert(dma_buf >= 0);
 
    u_gralloc_xclipse_dump("radv", gralloc_info->handle);
-
-   VkDeviceMemory memory_h;
 
    const VkImportMemoryFdInfoKHR import_info = {
       .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
@@ -139,15 +134,34 @@ radv_image_from_gralloc(VkDevice device_h, const VkImageCreateInfo *base_info,
    if (memory_type_index == -1)
       memory_type_index = 0;
 
-   result = radv_AllocateMemory(device_h,
-                                &(VkMemoryAllocateInfo){
-                                   .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                                   .pNext = &import_info,
-                                   /* Max buffer size, unused for imports */
-                                   .allocationSize = 0x7FFFFFFF,
-                                   .memoryTypeIndex = memory_type_index,
-                                },
-                                alloc, &memory_h);
+   return radv_AllocateMemory(device_h,
+                              &(VkMemoryAllocateInfo){
+                                 .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                 .pNext = &import_info,
+                                 /* Max buffer size, unused for imports */
+                                 .allocationSize = 0x7FFFFFFF,
+                                 .memoryTypeIndex = memory_type_index,
+                              },
+                              alloc, out_memory_h);
+}
+
+VkResult
+radv_image_from_gralloc(VkDevice device_h, const VkImageCreateInfo *base_info,
+                        const VkNativeBufferANDROID *gralloc_info, const VkAllocationCallbacks *alloc,
+                        VkImage *out_image_h)
+
+{
+   VK_FROM_HANDLE(radv_device, device, device_h);
+   VkImage image_h = VK_NULL_HANDLE;
+   struct radv_image *image = NULL;
+   VkResult result;
+
+   int dma_buf = gralloc_info->handle->data[0];
+   assert(dma_buf >= 0);
+
+   VkDeviceMemory memory_h;
+
+   result = radv_import_gralloc_memory(device_h, gralloc_info, alloc, &memory_h);
    if (result != VK_SUCCESS)
       return result;
 
