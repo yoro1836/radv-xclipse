@@ -243,6 +243,34 @@ fail_create_image:
    return result;
 }
 
+/* The platform loader (libvulkan) binds a swapchain image to its gralloc buffer with
+ * vkBindImageMemory2: memory is VK_NULL_HANDLE and a VkNativeBufferANDROID is chained in, both for
+ * images an app created with VkImageSwapchainCreateInfoKHR and for deferred-allocation swapchains
+ * (swapchain.cpp InterceptBindImageMemory2 and AcquireNextImage). The image was created before the
+ * buffer was known, so import the buffer here and let the image own the memory, as
+ * radv_image_from_gralloc() does at creation. */
+VkResult
+radv_android_bind_swapchain_image(struct radv_device *device, struct radv_image *image,
+                                  const VkNativeBufferANDROID *gralloc_info)
+{
+   const VkDevice device_h = radv_device_to_handle(device);
+   VkDeviceMemory memory_h;
+   VkResult result;
+
+   result = radv_import_gralloc_memory(device_h, gralloc_info, NULL, &memory_h);
+   if (result != VK_SUCCESS)
+      return result;
+
+   radv_image_override_offset_stride(device, image, 0, gralloc_info->stride);
+
+   /* A second bind replaces the first buffer. */
+   if (image->owned_memory != VK_NULL_HANDLE)
+      radv_FreeMemory(device_h, image->owned_memory, NULL);
+   image->owned_memory = memory_h;
+
+   return VK_SUCCESS;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 radv_QueueSignalReleaseImageANDROID(VkQueue queue_h, uint32_t waitSemaphoreCount,
                                     const VkSemaphore *pWaitSemaphores, VkImage image_h,

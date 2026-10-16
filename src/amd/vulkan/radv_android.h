@@ -35,10 +35,14 @@
 
 struct radv_device;
 struct radv_device_memory;
+struct radv_image;
 
 VkResult radv_image_from_gralloc(VkDevice device_h, const VkImageCreateInfo *base_info,
                                  const VkNativeBufferANDROID *gralloc_info, const VkAllocationCallbacks *alloc,
                                  VkImage *out_image_h);
+
+VkResult radv_android_bind_swapchain_image(struct radv_device *device, struct radv_image *image,
+                                           const VkNativeBufferANDROID *gralloc_info);
 
 unsigned radv_ahb_format_for_vk_format(VkFormat vk_format);
 

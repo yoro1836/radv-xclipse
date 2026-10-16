@@ -2032,7 +2032,30 @@ radv_BindImageMemory2(VkDevice _device, uint32_t bindInfoCount, const VkBindImag
                    image->vk.extent.width, image->vk.extent.height, (int)image->vk.format, (int)image->vk.tiling,
                    (unsigned)image->vk.usage, chain);
       }
+
+      /* Swapchain image bound by the platform loader: the gralloc buffer comes as a
+       * VkNativeBufferANDROID in the chain. */
+      if (!mem) {
+         const VkNativeBufferANDROID *gralloc_info =
+            vk_find_struct_const(pBindInfos[i].pNext, NATIVE_BUFFER_ANDROID);
+         if (gralloc_info) {
+            VkResult result = radv_android_bind_swapchain_image(device, image, gralloc_info);
+            if (result != VK_SUCCESS) {
+               if (status)
+                  *status->pResult = result;
+               return result;
+            }
+            mem = radv_device_memory_from_handle(image->owned_memory);
+            offset = 0;
+         }
+      }
 #endif
+
+      if (!mem) {
+         if (status)
+            *status->pResult = VK_ERROR_UNKNOWN;
+         return vk_errorf(device, VK_ERROR_UNKNOWN, "Image bound without memory.\n");
+      }
 
       const VkBindImagePlaneMemoryInfo *plane_info = NULL;
       uint32_t bind_idx = 0;
