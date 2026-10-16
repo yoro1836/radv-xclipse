@@ -90,6 +90,39 @@ radv_anb_derive_stride_bytes(const native_handle_t *hnd, const VkImageCreateInfo
    return 0;
 }
 
+/* The explicit layout of a gralloc buffer: from the gralloc query or, when that fails, a LINEAR
+ * layout with the stride recovered from the private handle. Returns the status of the query that
+ * produced the layout (VK_SUCCESS when there is one). */
+static VkResult
+radv_anb_explicit_layout(const VkImageCreateInfo *base_info, const VkNativeBufferANDROID *gralloc_info,
+                         int dma_buf, VkImageDrmFormatModifierExplicitCreateInfoEXT *mod_info,
+                         VkSubresourceLayout *layouts)
+{
+   VkResult result = vk_android_get_anb_layout(base_info, mod_info, layouts, RADV_ANDROID_MAX_PLANES);
+
+   /* The gralloc layout query failed: synthesize a LINEAR layout with the stride from the private
+    * handle. */
+   if (result != VK_SUCCESS) {
+      const uint32_t bpe = vk_format_get_blocksize(base_info->format);
+      const uint64_t row_pitch = radv_anb_derive_stride_bytes(gralloc_info->handle, base_info, dma_buf, bpe);
+      if (row_pitch) {
+         layouts[0] = (VkSubresourceLayout){.offset = 0, .size = 0, .rowPitch = row_pitch};
+         *mod_info = (VkImageDrmFormatModifierExplicitCreateInfoEXT){
+            .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
+            .drmFormatModifier = DRM_FORMAT_MOD_LINEAR,
+            .drmFormatModifierPlaneCount = 1,
+            .pPlaneLayouts = layouts,
+         };
+         if (ac_xclipse_log_level() >= 1)
+            mesa_logi("[ANB] gralloc layout query failed (%d) -- SYNTHESIZED a linear layout with "
+                      "rowPitch=%" PRIu64 " B from the private handle", result, row_pitch);
+         result = VK_SUCCESS;
+      }
+   }
+
+   return result;
+}
+
 /* Import the dma-buf of a gralloc buffer as a device memory object.
  *
  * 1) handle->numFds is about the number of plane(s) and metadata(optional) fd in a
@@ -181,27 +214,7 @@ radv_image_from_gralloc(VkDevice device_h, const VkImageCreateInfo *base_info,
    VkImageDrmFormatModifierExplicitCreateInfoEXT mod_info;
    VkSubresourceLayout layouts[RADV_ANDROID_MAX_PLANES];
    assert(vk_find_struct_const(base_info->pNext, NATIVE_BUFFER_ANDROID));
-   result = vk_android_get_anb_layout(base_info, &mod_info, layouts, RADV_ANDROID_MAX_PLANES);
-
-   /* The gralloc layout query failed: synthesize a LINEAR layout with the stride from the private
-    * handle. */
-   if (result != VK_SUCCESS) {
-      const uint32_t bpe = vk_format_get_blocksize(base_info->format);
-      const uint64_t row_pitch = radv_anb_derive_stride_bytes(gralloc_info->handle, base_info, dma_buf, bpe);
-      if (row_pitch) {
-         layouts[0] = (VkSubresourceLayout){.offset = 0, .size = 0, .rowPitch = row_pitch};
-         mod_info = (VkImageDrmFormatModifierExplicitCreateInfoEXT){
-            .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
-            .drmFormatModifier = DRM_FORMAT_MOD_LINEAR,
-            .drmFormatModifierPlaneCount = 1,
-            .pPlaneLayouts = layouts,
-         };
-         if (ac_xclipse_log_level() >= 1)
-            mesa_logi("[ANB] gralloc layout query failed (%d) -- SYNTHESIZED a linear layout with "
-                      "rowPitch=%" PRIu64 " B from the private handle", result, row_pitch);
-         result = VK_SUCCESS;
-      }
-   }
+   result = radv_anb_explicit_layout(base_info, gralloc_info, dma_buf, &mod_info, layouts);
    if (result == VK_SUCCESS) {
       mod_info.pNext = updated_base_info.pNext;
       updated_base_info.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
@@ -260,6 +273,37 @@ radv_android_bind_swapchain_image(struct radv_device *device, struct radv_image 
    result = radv_import_gralloc_memory(device_h, gralloc_info, NULL, &memory_h);
    if (result != VK_SUCCESS)
       return result;
+
+   /* The image was created without the buffer, so its layout is whatever RADV would pick for an
+    * optimal image. Lay it out as the buffer is, as radv_import_ahb_memory() does for an imported
+    * image: the explicit layout from gralloc, without metadata planes. */
+   struct radeon_bo_metadata md;
+   device->ws->buffer_get_metadata(device->ws, radv_device_memory_from_handle(memory_h)->bo, &md);
+
+   const VkImageCreateInfo base_info = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+      .pNext = gralloc_info,
+      .format = image->vk.format,
+      .extent = image->vk.extent,
+   };
+   VkImageDrmFormatModifierExplicitCreateInfoEXT mod_info;
+   VkSubresourceLayout layouts[RADV_ANDROID_MAX_PLANES];
+
+   result = radv_anb_explicit_layout(&base_info, gralloc_info, gralloc_info->handle->data[0], &mod_info, layouts);
+   if (result == VK_SUCCESS) {
+      for (unsigned plane = 0; plane < image->plane_count; ++plane)
+         image->planes[plane].surface.modifier = mod_info.drmFormatModifier;
+
+      result = radv_image_create_layout(device,
+                                        (struct radv_image_create_info){.no_metadata_planes = true, .bo_metadata = &md},
+                                        &mod_info, NULL, image);
+      if (result != VK_SUCCESS) {
+         radv_FreeMemory(device_h, memory_h, NULL);
+         return result;
+      }
+   } else if (ac_xclipse_log_level() >= 1) {
+      mesa_logi("[ANB] bind: no gralloc layout (%d), keeping the layout the image was created with", result);
+   }
 
    radv_image_override_offset_stride(device, image, 0, gralloc_info->stride);
 
