@@ -67,7 +67,8 @@ def main():
     meta = {
         'schemaVersion': 1,
         'name': 'RADV Xclipse (Mesa %s%s)' % (mesa_version, suffix),
-        'description': 'RADV for Samsung Xclipse GPUs, based on Mesa %s.' % mesa_version,
+        'description': 'RADV for Samsung Xclipse GPUs, based on Mesa %s. Fork build: Android null-memory '
+                       'image bind fix.' % mesa_version,
         'author': 'JimVulkan',
         'packageVersion': count,
         'vendor': 'Mesa',
