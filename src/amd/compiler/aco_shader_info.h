@@ -25,6 +25,8 @@ extern "C" {
 #define ACO_MAX_VERTEX_ATTRIBS 32
 #define ACO_MAX_VBS            32
 
+#define ACO_SPI_SHADER_Z_FORMAT_UNKNOWN 0xff
+
 struct aco_vs_prolog_info {
    struct ac_arg inputs;
 
@@ -74,6 +76,8 @@ struct aco_ps_epilog_info {
    bool kill_depth;
    bool kill_stencil;
    bool kill_samplemask;
+   bool lower_1bit_sample_mask_to_discard;
+   uint8_t spi_shader_z_format;
 
    struct ac_arg alpha_reference;
    struct ac_arg depth;
@@ -161,10 +165,24 @@ struct aco_compiler_options {
    bool has_vopd;
    /* Do not emit s_delay_alu: an RDNA3 hardware feature. The vendor compiler emits none here. */
    bool no_delay_alu;
+   /* No v_permlane64_b32 (RDNA3 hardware): on the Xclipse it reads 0, so a wave64 shuffle or
+    * rotate across the two 32-lane halves returned 0 (sgprobe 64; flicker in Eden). Cross-half
+    * wave64 permutes use the per-lane readlane emulation instead. */
+   bool no_permlane64;
    /* Global/scratch immediate offsets are 12-bit signed (-2048..2047) as on RDNA2, although the
     * GFX11 encoding has a 13-bit field. Measured on the Xclipse 920 (probe/gfx/rt/goffprobe): a
     * global access at +2800 or +4092 lands 4 KiB low. */
    bool gfx10_global_offsets;
+   /* Swizzled buffer access without IDXEN, as on GFX10_3, although the ISA is GFX11 (where ACO
+    * sets IDXEN for it). With IDXEN the Xclipse does not add the lane (ADD_TID), so every lane of a
+    * legacy GS wrote lane 0's GSVS slot (transform feedback on the 920). The vendor's GSVS stores
+    * use neither IDXEN nor OFFEN. */
+   bool swizzle_no_idxen;
+   /* Device-scope loads also set DLC. The ISA is GFX11, where GLC alone means device scope, but
+    * the Xclipse caches keep GFX10_3's scopes: GLC alone is shader-array scope, and only GLC + DLC
+    * bypasses GL1. With more than one shader array (940: 2, 950: 4) a wave spinning on another
+    * array's write never saw it (the BVH build hung from 512 triangles on the 950). */
+   bool device_scope_dlc;
    /* Load FLAT_SCRATCH in the shader from the scratch ring address in s[0:1] and the wave's
     * scratch offset, as on GFX10.3, although the ISA is GFX11 (where the hardware sets the base
     * from COMPUTE_DISPATCH_SCRATCH_BASE). The Xclipse's command processor is GFX10.3 and never
@@ -205,7 +223,7 @@ struct aco_symbol {
    unsigned offset;
 };
 
-#define MAX_SGPRS 108
+#define MAX_SGPRS       108
 #define MAX_VGPRS       256
 #define MAX_LDS_SIZE    65536 /* 64 KiB */
 #define NUM_SAVED_VGPRS 2

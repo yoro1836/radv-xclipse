@@ -7,6 +7,7 @@
  */
 
 #include "radv_wsi.h"
+#include "util/detect_os.h"
 #include "radv_buffer.h"
 #include "radv_buffer_view.h"
 #include "radv_device.h"
@@ -52,7 +53,11 @@ radv_wsi_get_prime_blit_queue(VkDevice _device)
       return &device->private_sdma_queue->vk;
    }
 
-   if (pdev->info.gfx_level >= GFX9 && !(instance->debug_flags & RADV_DEBUG_NO_DMA_BLIT)) {
+   /* Xclipse: there is no SDMA engine (the kernel rejects any CS on that ring with -EINVAL), so
+    * WSI copies stay on the present queue. Android never asks for this queue; a glibc build's X11
+    * swapchain with CPU images (an X server without DRI3, or MESA_VK_WSI_DEBUG=sw) does, on every
+    * present. */
+   if (pdev->info.gfx_level >= GFX9 && !RADV_DEBUG(instance, NO_DMA_BLIT) && pdev->info.pci_id != 0x73a0) {
 
       uint32_t queue_family_index = pdev->num_queues;
       for (uint32_t i = 0; i < pdev->num_queues; i++) {
@@ -97,13 +102,26 @@ radv_init_wsi(struct radv_physical_device *pdev)
 
    VkResult result =
       wsi_device_init(&pdev->wsi_device, radv_physical_device_to_handle(pdev), radv_wsi_proc_addr, &instance->vk.alloc,
-                      pdev->wsi_master_fd, &instance->drirc.options, &(struct wsi_device_options){.sw_device = false});
+                      pdev->wsi_master_fd, &pdev->drirc.options, &(struct wsi_device_options){.sw_device = false});
    if (result != VK_SUCCESS)
       return result;
 
-   pdev->wsi_device.supports_modifiers = pdev->info.gfx_level >= GFX9;
+   pdev->wsi_device.supports_modifiers = true;
    pdev->wsi_device.set_memory_ownership = radv_wsi_set_memory_ownership;
    pdev->wsi_device.get_blit_queue = radv_wsi_get_prime_blit_queue;
+
+#if !DETECT_OS_ANDROID
+   /* Xclipse outside Android is a glibc userspace on the phone (Termux PRoot). Termux:X11 has DRI3
+    * and takes our linear dma-bufs (measured: >= 100 fps in vkcube against >= 60 for CPU copies);
+    * an X server without DRI3 (VNC) gets CPU-image swapchains sent with PutImage instead of no
+    * presentation at all. MESA_VK_WSI_DEBUG=sw still forces CPU images everywhere. */
+   if (pdev->info.pci_id == 0x73a0)
+      pdev->wsi_device.x11_sw_fallback = true;
+#endif
+   /* Wayland compositors that offer no dma-buf (in a PRoot, or inside an Android app) get wl_shm
+    * copies instead of no presentation at all. */
+   if (pdev->info.pci_id == 0x73a0)
+      pdev->wsi_device.wl_sw_fallback = true;
 
    for (uint32_t i = 0; i < ARRAY_SIZE(pdev->wsi_device.supports_protected); i++) {
       pdev->wsi_device.supports_protected[i] = radv_tmz_enabled(pdev);
@@ -120,6 +138,9 @@ void
 radv_finish_wsi(struct radv_physical_device *pdev)
 {
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
+
+   if (!pdev->vk.wsi_device)
+      return;
 
    pdev->vk.wsi_device = NULL;
    wsi_device_finish(&pdev->wsi_device, &instance->vk.alloc);

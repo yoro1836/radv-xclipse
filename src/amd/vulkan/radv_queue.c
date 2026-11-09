@@ -251,7 +251,11 @@ radv_set_ring_buffer(const struct radv_physical_device *pdev, struct radeon_wins
             PIPE_SWIZZLE_Z,
             PIPE_SWIZZLE_W,
          },
-      .swizzle_enable = swizzle_enable,
+      /* Xclipse: the buffer unit takes the GFX11 descriptor layout, but reads swizzle-enable at
+       * GFX10_3's bit 31, which is GFX11 value 2 (the vendor's GSVS ring descriptor has
+       * 0x80000000 there). GFX11 value 1 sets only bit 30, GFX10_3's CACHE_SWIZZLE: the ring was
+       * not swizzled and the GS copy shader read zeros (transform feedback on the 920). */
+      .swizzle_enable = swizzle_enable && pdev->info.gfx11_shader_core ? 2 : swizzle_enable,
       .element_size = element_size,
       .index_stride = index_stride,
       .add_tid = add_tid,
@@ -453,7 +457,9 @@ radv_emit_task_rings(struct radv_device *device, struct radv_cmd_stream *cs, str
 
    radeon_begin(cs);
 
-   /* Tell the GPU where the task control buffer is. */
+   /* Tell the GPU where the task control buffer is.
+    * CP reads the buffer and caches the data structure internally.
+    */
    radeon_emit(PKT3(PKT3_DISPATCH_TASK_STATE_INIT, 1, 0) | PKT3_SHADER_TYPE_S(!!compute));
    /* bits [31:8]: control buffer address lo, bits[7:0]: reserved (set to zero) */
    radeon_emit(task_ctrlbuf_va & 0xFFFFFF00);
@@ -480,7 +486,9 @@ radv_emit_graphics_scratch(struct radv_device *device, struct radv_cmd_stream *c
 
    radv_cs_add_buffer(device->ws, cs->b, scratch_bo);
 
-   ac_emit_cp_gfx_scratch(cs->b, pdev->info.gfx_level, va, tmpring_size);
+   /* Xclipse 530/940: the scratch base registers as on GFX11 (see radv_compiler_info::hw). */
+   ac_emit_cp_gfx_scratch(cs->b, device->compiler_info.hw.hw_scratch_base ? GFX11 : pdev->info.gfx_level, va,
+                          tmpring_size);
 }
 
 static void
@@ -515,6 +523,14 @@ radv_emit_compute_scratch(struct radv_device *device, struct radv_cmd_stream *cs
       radeon_emit(scratch_va >> 40);
    } else {
       uint32_t rsrc1 = S_008F04_BASE_ADDRESS_HI(scratch_va >> 32) | S_008F04_SWIZZLE_ENABLE_GFX6(1);
+
+      /* Xclipse 530/940: the hardware initializes FLAT_SCRATCH from this, as on GFX11; the ring
+       * stays in s[0:1] too, where the shader arguments expect it. */
+      if (device->compiler_info.hw.hw_scratch_base) {
+         radeon_set_sh_reg_seq(R_00B840_COMPUTE_DISPATCH_SCRATCH_BASE_LO, 2);
+         radeon_emit(scratch_va >> 8);
+         radeon_emit(scratch_va >> 40);
+      }
 
       radeon_set_sh_reg_seq(R_00B900_COMPUTE_USER_DATA_0, 2);
       radeon_emit(scratch_va);
@@ -590,6 +606,15 @@ radv_emit_graphics_shader_pointers(struct radv_device *device, struct radv_cmd_s
       for (int i = 0; i < ARRAY_SIZE(regs); ++i) {
          radeon_emit_64bit_pointer(regs[i], va);
       }
+
+      /* TITAN (530, 940) loads s[0:1] of the merged HS and GS stages from PGM_LO/HI_HS and
+       * PGM_LO/HI_GS, as GFX11 does, not from USER_DATA_ADDR. Without it the ring table pointer is
+       * garbage and the first tessellated draw hangs the GPU (the LS-HS and the TES both read
+       * their rings through it). Both stages need it. */
+      if (pdev->info.family == CHIP_TITAN) {
+         radeon_emit_64bit_pointer(R_00B420_SPI_SHADER_PGM_LO_HS, va);
+         radeon_emit_64bit_pointer(R_00B220_SPI_SHADER_PGM_LO_GS, va);
+      }
    } else if (pdev->info.gfx_level == GFX9) {
       uint32_t regs[] = {R_00B030_SPI_SHADER_USER_DATA_PS_0, R_00B130_SPI_SHADER_USER_DATA_VS_0,
                          R_00B208_SPI_SHADER_USER_DATA_ADDR_LO_GS, R_00B408_SPI_SHADER_USER_DATA_ADDR_LO_HS};
@@ -658,7 +683,7 @@ radv_xclipse_ctxinit_mode(const struct radv_physical_device *pdev)
             want = atoi(v);
       }
 #endif
-      cached = want >= 0 ? want : (pdev->info.xclipse_model == AC_XCLIPSE_530 ? 1 : 0);
+      cached = want >= 0 ? want : ac_xclipse_chip_info(&pdev->info)->ctx_init;
       RADV_LOGI("[XCLIPSE] ctx_init=%d (model=%d, %u regs)", cached,
                 pdev->info.xclipse_model, (unsigned)ARRAY_SIZE(ac_xclipse_ctx_init));
    }
@@ -815,6 +840,14 @@ radv_emit_graphics(struct radv_device *device, struct radv_cmd_stream *cs)
              (unsigned long long)border_color_va, has_clear_state);
    ac_init_graphics_preamble_state(&preamble_state, pm4);
 
+   /* Xclipse: the binner's batch budget and sub-batch binning / ping-pong bin order as the vendor
+    * programs them; radv_get_binning_state() sets the matching bin size and states. */
+   const struct ac_xclipse_pbb *xpbb = ac_xclipse_pbb(&pdev->info);
+   if (xpbb) {
+      ac_pm4_set_reg(pm4, R_028C48_PA_SC_BINNER_CNTL_1, xpbb->cntl_1);
+      ac_pm4_set_reg(pm4, R_028C54_PA_SC_BINNER_CNTL_2, xpbb->cntl_2);
+   }
+
    if (!has_clear_state) {
       for (i = 0; i < 16; i++) {
          ac_pm4_set_reg(pm4, R_0282D0_PA_SC_VPORT_ZMIN_0 + i * 8, 0);
@@ -935,6 +968,28 @@ radv_emit_graphics(struct radv_device *device, struct radv_cmd_stream *cs)
       RADV_LOGI("[QUEUE] IFPO guard armed (CP_PERFMON_CNTL=STOP_COUNTING blocks inter-frame power off)");
    }
 
+   /* Xclipse 960: its kernel programs neither the GL2-to-LLC allocation policy per MTYPE nor
+    * GL2C_CTRL5 (the 940's golden list sets both), and the vendor driver restates them at the start
+    * of every submit. Same values as its submits, effective at the first draw. */
+   if (pdev->xclipse_llc) {
+      static const uint32_t mty[18] = {
+         0x124996db, 0x0001369a, 0, 0, /* MTY0, MTY1 */
+         0x1b6db6db, 0x0001b6db, 0x1b6db6db, 0x0001b6db, 0x1b6db6db, 0x0001b6db, /* MTY2..4 */
+         0x1b6db6db, 0x0001b6db, 0x1b6db6db, 0x0001b6db, 0x1b6db6db, 0x0001b6db, /* MTY5..7 */
+         0, 0, /* MTY_RIDX, MTY_WIDX */
+      };
+      static const uint32_t tail[11] = {
+         0x0001ff7f, 0x0001ff7f, 0x0001ffff, 0xffffffff, 0xffffffff, 0xffffffff,
+         0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff,
+      };
+      for (unsigned i = 0; i < ARRAY_SIZE(mty); i++)
+         ac_pm4_set_reg(pm4, CIK_UCONFIG_REG_OFFSET + (0x480 + i) * 4, mty[i]);
+      ac_pm4_set_reg(pm4, CIK_UCONFIG_REG_OFFSET + 0x493 * 4, 0x41); /* GL2ACEM_LLC_TEX */
+      for (unsigned i = 0; i < ARRAY_SIZE(tail); i++)
+         ac_pm4_set_reg(pm4, CIK_UCONFIG_REG_OFFSET + (0x494 + i) * 4, tail[i]);
+      ac_pm4_set_reg(pm4, CIK_UCONFIG_REG_OFFSET + 0x4c0 * 4, 0x00080128); /* GL2C_CTRL5 */
+   }
+
    ac_pm4_finalize(pm4);
    ac_pm4_emit_commands(cs->b, pm4);
    ac_pm4_free_state(pm4);
@@ -1031,8 +1086,7 @@ radv_update_preamble_cs(struct radv_queue_state *queue, struct radv_device *devi
       /* We write the control buffer from the CPU, so need to grant CPU access to the BO.
        * The draw ring needs to be zero-initialized otherwise the ready bits will be incorrect.
        */
-      uint32_t task_rings_bo_flags =
-         RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING | RADEON_FLAG_ZERO_VRAM;
+      uint32_t task_rings_bo_flags = RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING;
 
       result = radv_bo_create(device, NULL, pdev->task_info.bo_size_bytes, 256, RADEON_DOMAIN_VRAM, task_rings_bo_flags,
                               RADV_BO_PRIORITY_SCRATCH, 0, true, &task_rings_bo);
@@ -1142,7 +1196,7 @@ radv_update_preamble_cs(struct radv_queue_state *queue, struct radv_device *devi
    const enum amd_ip_type hw_ip = radv_queue_family_to_ring(pdev, queue->qf);
 
    for (int i = 0; i < 3; ++i) {
-      enum rgp_flush_bits sqtt_flush_bits = 0;
+      enum ac_rgp_flush_bits rgp_flush_bits = 0;
       struct radv_cmd_stream *cs = NULL;
 
       result = radv_create_cmd_stream(device, hw_ip, false, &cs);
@@ -1174,7 +1228,6 @@ radv_update_preamble_cs(struct radv_queue_state *queue, struct radv_device *devi
 
          radv_emit_gs_ring_sizes(device, cs, esgs_ring_bo, needs->esgs_ring_size, gsvs_ring_bo, needs->gsvs_ring_size);
          radv_emit_tess_factor_ring(device, cs, tess_rings_bo);
-         radv_emit_task_rings(device, cs, task_rings_bo, false);
          radv_emit_ge_rings(device, cs, ge_rings_bo);
          radv_emit_graphics_shader_pointers(device, cs, descriptor_bo);
          radv_emit_compute_scratch(device, cs, needs->compute_scratch_size_per_wave, needs->compute_scratch_waves,
@@ -1183,14 +1236,6 @@ radv_update_preamble_cs(struct radv_queue_state *queue, struct radv_device *devi
          break;
       case RADV_QUEUE_COMPUTE:
          radv_emit_compute(device, cs, true);
-
-         if (task_rings_bo) {
-            radeon_begin(cs);
-            radeon_event_write(V_028A90_CS_PARTIAL_FLUSH);
-            radeon_end();
-         }
-
-         radv_emit_task_rings(device, cs, task_rings_bo, true);
          radv_emit_compute_shader_pointers(device, cs, descriptor_bo);
          radv_emit_compute_scratch(device, cs, needs->compute_scratch_size_per_wave, needs->compute_scratch_waves,
                                    compute_scratch_bo);
@@ -1199,22 +1244,28 @@ radv_update_preamble_cs(struct radv_queue_state *queue, struct radv_device *devi
          break;
       }
 
-      if (i < 2) {
+      if (i < 2 || task_rings_bo) {
          /* The two initial preambles have a cache flush at the beginning. */
          const enum amd_gfx_level gfx_level = pdev->info.gfx_level;
-         enum radv_cmd_flush_bits flush_bits = RADV_CMD_FLAG_INV_ICACHE | RADV_CMD_FLAG_INV_SCACHE |
-                                               RADV_CMD_FLAG_INV_VCACHE | RADV_CMD_FLAG_INV_L2 |
-                                               RADV_CMD_FLAG_START_PIPELINE_STATS;
+         enum ac_barrier_flags flush_bits = AC_BARRIER_INV_ICACHE | AC_BARRIER_INV_SMEM | AC_BARRIER_INV_VMEM |
+                                            AC_BARRIER_INV_L2 | AC_BARRIER_PIPELINESTAT_START;
 
-         if (i == 0) {
+         if (i == 0 || task_rings_bo) {
             /* The full flush preamble should also wait for previous shader work to finish. */
-            flush_bits |= RADV_CMD_FLAG_CS_PARTIAL_FLUSH;
+            flush_bits |= AC_BARRIER_SYNC_CS;
             if (queue->qf == RADV_QUEUE_GENERAL)
-               flush_bits |= RADV_CMD_FLAG_PS_PARTIAL_FLUSH;
+               flush_bits |= AC_BARRIER_SYNC_VS | AC_BARRIER_SYNC_PS;
          }
 
-         radv_cs_emit_cache_flush(ws, cs, gfx_level, NULL, 0, flush_bits, &sqtt_flush_bits, 0);
+         radv_cs_emit_cache_flush(ws, cs, gfx_level, NULL, 0, flush_bits, &rgp_flush_bits, AC_PWS_ACQUIRE_POINT_PFP, 0);
       }
+
+      /* Emit task rings after the initial cache flush and wait
+       * to make sure that we aren't reading stale data from cache
+       * and that a previous submission isn't perturbing the BO.
+       */
+      if (task_rings_bo)
+         radv_emit_task_rings(device, cs, task_rings_bo, queue->qf == RADV_QUEUE_COMPUTE);
 
       result = radv_finalize_cmd_stream(device, cs);
       if (result != VK_SUCCESS)
@@ -1342,11 +1393,13 @@ radv_update_preambles(struct radv_queue_state *queue, struct radv_device *device
    for (uint32_t j = 0; j < cmd_buffer_count; j++) {
       struct radv_cmd_buffer *cmd_buffer = container_of(cmd_buffers[j], struct radv_cmd_buffer, vk);
 
-      needs.scratch_size_per_wave = MAX2(needs.scratch_size_per_wave, cmd_buffer->queue_state.scratch_size_per_wave_needed);
+      needs.scratch_size_per_wave =
+         MAX2(needs.scratch_size_per_wave, cmd_buffer->queue_state.scratch_size_per_wave_needed);
       needs.scratch_waves = MAX2(needs.scratch_waves, cmd_buffer->queue_state.scratch_waves_wanted);
       needs.compute_scratch_size_per_wave =
          MAX2(needs.compute_scratch_size_per_wave, cmd_buffer->queue_state.compute_scratch_size_per_wave_needed);
-      needs.compute_scratch_waves = MAX2(needs.compute_scratch_waves, cmd_buffer->queue_state.compute_scratch_waves_wanted);
+      needs.compute_scratch_waves =
+         MAX2(needs.compute_scratch_waves, cmd_buffer->queue_state.compute_scratch_waves_wanted);
       needs.esgs_ring_size = MAX2(needs.esgs_ring_size, cmd_buffer->queue_state.esgs_ring_size_needed);
       needs.gsvs_ring_size = MAX2(needs.gsvs_ring_size, cmd_buffer->queue_state.gsvs_ring_size_needed);
       needs.tess_rings |= cmd_buffer->queue_state.tess_rings_needed;
@@ -1431,7 +1484,6 @@ radv_create_flush_postamble(struct radv_queue *queue)
    const struct radv_device *device = radv_queue_device(queue);
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const enum amd_ip_type ip = radv_queue_family_to_ring(pdev, queue->state.qf);
-   const bool is_mec = ip == AMD_IP_COMPUTE && pdev->info.gfx_level >= GFX7;
    struct radeon_winsys *ws = device->ws;
    struct radv_cmd_stream *cs;
    VkResult result;
@@ -1440,40 +1492,17 @@ radv_create_flush_postamble(struct radv_queue *queue)
    if (result != VK_SUCCESS)
       return result;
 
-   radeon_check_space(ws, cs->b, 256);
-
-   ac_cmdbuf_begin(cs->b);
-   if (ip == AMD_IP_GFX) {
-      ac_cmdbuf_event_write(V_028A90_VS_PARTIAL_FLUSH);
-      ac_cmdbuf_event_write(V_028A90_PS_PARTIAL_FLUSH);
-      ac_cmdbuf_event_write(V_028A90_FLUSH_AND_INV_CB_META);
-      ac_cmdbuf_event_write(V_028A90_FLUSH_AND_INV_DB_META);
-   }
-   ac_cmdbuf_event_write(V_028A90_CS_PARTIAL_FLUSH);
-   ac_cmdbuf_end();
-
-   if (!is_mec)
-      ac_emit_cp_pfp_sync_me(cs->b, false);
-
-   uint32_t cp_coher_cntl =
-      S_0085F0_TC_ACTION_ENA(1) |
-      S_0085F0_TCL1_ACTION_ENA(1);
+   enum ac_barrier_flags flush_bits = AC_BARRIER_SYNC_CS | AC_BARRIER_INV_L2;
 
    if (ip == AMD_IP_GFX)
-      cp_coher_cntl |=
-         S_0085F0_CB_ACTION_ENA(1) |
-         S_0085F0_CB0_DEST_BASE_ENA(1) |
-         S_0085F0_CB1_DEST_BASE_ENA(1) |
-         S_0085F0_CB2_DEST_BASE_ENA(1) |
-         S_0085F0_CB3_DEST_BASE_ENA(1) |
-         S_0085F0_CB4_DEST_BASE_ENA(1) |
-         S_0085F0_CB5_DEST_BASE_ENA(1) |
-         S_0085F0_CB6_DEST_BASE_ENA(1) |
-         S_0085F0_CB7_DEST_BASE_ENA(1) |
-         S_0085F0_DB_ACTION_ENA(1) |
-         S_0085F0_DB_DEST_BASE_ENA(1);
+      flush_bits |= AC_BARRIER_SYNC_VS | AC_BARRIER_SYNC_PS | AC_BARRIER_SYNC_AND_INV_CB | AC_BARRIER_SYNC_AND_INV_DB |
+                    AC_BARRIER_SYNC_AND_INV_CB_META | AC_BARRIER_SYNC_AND_INV_DB_META;
 
-   ac_emit_cp_acquire_mem(cs->b, pdev->info.gfx_level, cs->hw_ip, V_581A_PREFETCH_PARSER, cp_coher_cntl);
+   enum ac_rgp_flush_bits rgp_flush_bits = 0;
+   uint32_t flush_cnt = 0;
+
+   radv_cs_emit_cache_flush(ws, cs, pdev->info.gfx_level, &flush_cnt, 0, flush_bits, &rgp_flush_bits,
+                            AC_PWS_ACQUIRE_POINT_PFP, 0);
 
    result = radv_finalize_cmd_stream(device, cs);
    if (result != VK_SUCCESS) {
@@ -1498,9 +1527,13 @@ radv_create_gang_wait_preambles_postambles(struct radv_queue *queue)
    VkResult r = VK_SUCCESS;
    struct radeon_winsys *ws = device->ws;
    struct radeon_winsys_bo *gang_sem_bo = NULL;
-   enum radeon_bo_flag gang_sem_bo_flags = RADEON_FLAG_NO_INTERPROCESS_SHARING | RADEON_FLAG_ZERO_VRAM;
+   enum radeon_bo_flag gang_sem_bo_flags = RADEON_FLAG_NO_INTERPROCESS_SHARING;
 
-   /* When the "gang leader" is SDMA, we need to ensure that the gang semaphores BO
+   /* Gang wait preamble is executed before the main preamble which means it may be
+    * before a cache flush, which may cause the CP to read stale values. Bypass the
+    * L2 cache to make sure it works.
+    *
+    * Also when the "gang leader" is SDMA, we need to ensure that the gang semaphores BO
     * is coherent between SDMA and CP. To achieve this, we need bypass the L2 cache
     * when either SDMA or CP are connected to L2.
     *
@@ -1520,8 +1553,7 @@ radv_create_gang_wait_preambles_postambles(struct radv_queue *queue)
     * GFX12:
     *   neither CP nor SDMA are connected to L2
     */
-   if (ip == AMD_IP_SDMA && pdev->info.gfx_level >= GFX9 && pdev->info.gfx_level < GFX12)
-      gang_sem_bo_flags |= RADEON_FLAG_GL2_BYPASS;
+   gang_sem_bo_flags |= RADEON_FLAG_GL2_BYPASS;
 
    /* Gang semaphores BO.
     * DWORD 0: used in preambles, gang leader writes, gang members wait.
@@ -1572,17 +1604,38 @@ radv_create_gang_wait_preambles_postambles(struct radv_queue *queue)
     * in a multi-process environment, because task shader dispatches are not
     * meant to be executed on multiple compute engines at the same time.
     */
-   radv_cp_wait_mem(ace_pre_cs, WAIT_REG_MEM_GREATER_OR_EQUAL, ace_wait_va, 1, 0xffffffff);
+
+   uint32_t ace_pre_wait_flags = S_3C1_FUNCTION(V_3C1_GREATER_THAN_OR_EQUAL_REFERENCE_VALUE);
+   if (pdev->info.gfx_level >= GFX9)
+      ace_pre_wait_flags |= S_3C1_OPERATION(V_3C1_WAIT_MEM_PREEMPTABLE);
+   else if (pdev->info.gfx_level == GFX8)
+      ace_pre_wait_flags |= WAIT_REG_MEM_UNCACHED_VI_MEC;
+
+   ac_emit_cp_wait_mem(ace_pre_cs->b, ace_wait_va, 1, 0xffffffff, ace_pre_wait_flags);
    radv_cs_write_data(device, ace_pre_cs, V_371_MICRO_ENGINE, ace_wait_va, 1, &zero, false);
    radv_cs_write_data(device, leader_pre_cs, V_371_MICRO_ENGINE, ace_wait_va, 1, &one, false);
+
    /* Create postambles for gang submission.
     * This ensures that the gang leader waits for the whole gang,
     * which is necessary because the kernel signals the userspace fence
     * as soon as the gang leader is done, which may lead to bugs because the
     * same command buffers could be submitted again while still being executed.
     */
-   radv_cp_wait_mem(leader_post_cs, WAIT_REG_MEM_GREATER_OR_EQUAL, leader_wait_va, 1, 0xffffffff);
-   radv_cs_write_data(device, leader_post_cs, V_371_MICRO_ENGINE, leader_wait_va, 1, &zero, false);
+
+   const uint32_t leader_engine_sel = ip == AMD_IP_GFX ? V_371_PREFETCH_PARSER : V_371_MICRO_ENGINE;
+
+   if (ip == AMD_IP_SDMA) {
+      ac_emit_sdma_wait_mem(leader_post_cs->b, pdev->info.sdma_ip_version, WAIT_REG_MEM_GREATER_OR_EQUAL,
+                            leader_wait_va, 1, 0xffffffff);
+   } else {
+      uint32_t cp_post_wait_flags =
+         S_3C1_FUNCTION(V_3C1_GREATER_THAN_OR_EQUAL_REFERENCE_VALUE) | S_3C1_ENGINE_SEL(leader_engine_sel);
+      if (pdev->info.gfx_level == GFX8 && ip == AMD_IP_COMPUTE)
+         cp_post_wait_flags |= WAIT_REG_MEM_UNCACHED_VI_MEC;
+
+      ac_emit_cp_wait_mem(leader_post_cs->b, leader_wait_va, 1, 0xffffffff, cp_post_wait_flags);
+   }
+   radv_cs_write_data(device, leader_post_cs, leader_engine_sel, leader_wait_va, 1, &zero, false);
    radv_cs_emit_write_event_eop(ace_post_cs, pdev->info.gfx_level, V_028A90_BOTTOM_OF_PIPE_TS, 0, EOP_DST_SEL_MEM,
                                 EOP_INT_SEL_SEND_DATA_AFTER_WR_CONFIRM, EOP_DATA_SEL_VALUE_32BIT, leader_wait_va, 1, 0);
 
@@ -1985,6 +2038,14 @@ radv_queue_submit(struct vk_queue *vqueue, struct vk_queue_submit *submission)
    return r;
 }
 
+void
+radv_queue_handle_fault_state(struct radv_queue *queue)
+{
+   struct radv_device *device = radv_queue_device(queue);
+
+   radv_report_gpuvm_fault(device);
+}
+
 static VkResult
 radv_queue_sparse_submit(struct vk_queue *vqueue, struct vk_queue_submit *submission)
 {
@@ -2020,8 +2081,7 @@ fail:
        * VK_ERROR_DEVICE_LOST to ensure the clients do not attempt
        * to submit the same job again to this device.
        */
-      radv_report_gpuvm_fault(device);
-      result = vk_device_set_lost(&device->vk, "vkQueueSubmit() failed");
+      result = radv_queue_set_lost(queue, "vkQueueBindSparse() failed");
    }
    return result;
 }
@@ -2054,8 +2114,7 @@ fail:
        * VK_ERROR_DEVICE_LOST to ensure the clients do not attempt
        * to submit the same job again to this device.
        */
-      radv_report_gpuvm_fault(device);
-      result = vk_device_set_lost(&device->vk, "vkQueueSubmit() failed");
+      result = radv_queue_set_lost(queue, "vkQueueSubmit() failed");
    }
    return result;
 }
@@ -2133,6 +2192,12 @@ radv_queue_init(struct radv_device *device, struct radv_queue *queue, int idx,
       if (result != VK_SUCCESS)
          goto fail;
    }
+
+   /* Use internal synchronization for UVD < 6.3 to prevent a possible
+    * race between application submissions and destroying the video session.
+    */
+   if (pdev->info.family < CHIP_POLARIS10 && queue->state.qf == RADV_QUEUE_VIDEO_DEC)
+      queue->vk.internally_synchronized = true;
 
    return VK_SUCCESS;
 fail:

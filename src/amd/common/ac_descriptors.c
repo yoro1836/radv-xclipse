@@ -711,15 +711,6 @@ ac_build_texture_descriptor(const struct radeon_info *info, const struct ac_text
    }
 }
 
-uint32_t
-ac_tile_mode_index(const struct radeon_surf *surf, unsigned level, bool stencil)
-{
-   if (stencil)
-      return surf->u.legacy.zs.stencil_tiling_index[level];
-   else
-      return surf->u.legacy.tiling_index[level];
-}
-
 void
 ac_set_mutable_tex_desc_fields(const struct radeon_info *info, const struct ac_mutable_tex_state *state, uint32_t desc[8])
 {
@@ -895,7 +886,7 @@ ac_set_mutable_tex_desc_fields(const struct radeon_info *info, const struct ac_m
    } else {
       /* GFX6-GFX8 */
       unsigned pitch = base_level_info->nblk_x * state->gfx6.block_width;
-      unsigned index = ac_tile_mode_index(surf, state->gfx6.base_level, state->is_stencil);
+      unsigned index = ac_surface_get_legacy_tiling_index(surf, state->gfx6.base_level, state->is_stencil);
 
       /* Only macrotiled modes can set tile swizzle. */
       if (base_level_info->mode == RADEON_SURF_MODE_2D)
@@ -1054,8 +1045,8 @@ ac_init_gfx6_ds_surface(const struct radeon_info *info, const struct ac_ds_state
    ds->db_stencil_info = S_028044_FORMAT(stencil_format);
 
    if (info->gfx_level >= GFX7) {
-      const uint32_t index = surf->u.legacy.tiling_index[state->level];
-      const uint32_t stencil_index = surf->u.legacy.zs.stencil_tiling_index[state->level];
+      const uint32_t index = ac_surface_get_legacy_tiling_index(surf, state->level, false);
+      const uint32_t stencil_index = ac_surface_get_legacy_tiling_index(surf, state->level, true);
       const uint32_t macro_index = surf->u.legacy.macro_tile_index;
       const uint32_t stencil_tile_mode = info->si_tile_mode_array[stencil_index];
       const uint32_t macro_mode = info->cik_macrotile_mode_array[macro_index];
@@ -1073,10 +1064,10 @@ ac_init_gfx6_ds_surface(const struct radeon_info *info, const struct ac_ds_state
       ds->db_z_info |= S_028040_TILE_SPLIT(G_009910_TILE_SPLIT(tile_mode));
       ds->db_stencil_info |= S_028044_TILE_SPLIT(G_009910_TILE_SPLIT(stencil_tile_mode));
    } else {
-      uint32_t tile_mode_index = ac_tile_mode_index(surf, state->level, false);
+      uint32_t tile_mode_index = ac_surface_get_legacy_tiling_index(surf, state->level, false);
       ds->db_z_info |= S_028040_TILE_MODE_INDEX(tile_mode_index);
 
-      tile_mode_index = ac_tile_mode_index(surf, state->level, true);
+      tile_mode_index = ac_surface_get_legacy_tiling_index(surf, state->level, true);
       ds->db_stencil_info |= S_028044_TILE_MODE_INDEX(tile_mode_index);
       if (state->stencil_only)
          ds->db_z_info |= S_028040_TILE_MODE_INDEX(tile_mode_index);
@@ -1321,7 +1312,11 @@ ac_set_mutable_ds_surface_fields(const struct radeon_info *info, const struct ac
          if (info->gfx_level >= GFX10) {
             const bool iterate256 = log_num_samples >= 1;
 
-            ds->db_z_info |= S_028040_ITERATE_FLUSH(1);
+            /* Xclipse 960 (8 pipes, 2 SEs): Z ITERATE_FLUSH breaks TC-compatible HTILE, an 8x8
+             * tile holding the clear value and one Z plane samples as the clear value
+             * (probe/gfx/shd). The vendor never sets it on any Xclipse, but the 920 under RADV
+             * needs it: without it the same probe fails there. */
+            ds->db_z_info |= S_028040_ITERATE_FLUSH(info->xclipse_model != AC_XCLIPSE_960);
             ds->db_stencil_info |= S_028044_ITERATE_FLUSH(!tile_stencil_disable);
             ds->db_z_info |= S_028040_ITERATE_256(iterate256);
             ds->db_stencil_info |= S_028044_ITERATE_256(iterate256);
@@ -1457,15 +1452,15 @@ ac_init_gfx10_cb_surface(const struct radeon_info *info, const struct ac_cb_stat
                              S_028C74_FORCE_DST_ALPHA_1_GFX6(force_dst_alpha_1);
       cb->cb_dcc_control |= S_028C78_INDEPENDENT_128B_BLOCKS_GFX10(surf->u.gfx9.color.dcc.independent_128B_blocks);
 
-      /* Xclipse 920: the CB reads CB_COLOR_ATTRIB in the GFX11 layout; with the GFX10_3 encoding
-       * partially covered MSAA draws hang. Encode like the vendor (0x12 for 4x: NUM_FRAGMENTS[0:1] +
-       * LIMIT_COLOR_FETCH_TO_256B_MAX bit4; bit4 must not be set on single-sample targets). */
+      /* Xclipse: the CB reads CB_COLOR_ATTRIB in a GFX11-like layout, NUM_FRAGMENTS in [0:1] and
+       * log2(samples) in [3:5] (vendor: 0x9 for 2x, 0x12 for 4x). Bits 3-5 are not the GFX11 flag
+       * bits: the old fixed bit 4 only matched at 4x, and 2x/8x resolved garbage. */
       if (info->gfx11_shader_core && state->num_storage_samples > 1) {
          /* Drop the GFX10_3 sample/fragment/FMASK fields [0:19] entirely. */
          cb->cb_color_attrib &= ~0xFFFFFu;
          cb->cb_color_attrib |= S_028C74_NUM_FRAGMENTS_GFX11(util_logbase2(state->num_storage_samples)) |
                                 S_028C74_FORCE_DST_ALPHA_1_GFX11(force_dst_alpha_1) |
-                                1u << 4; /* LIMIT_COLOR_FETCH_TO_256B_MAX (GFX11 position) */
+                                util_logbase2(state->num_samples) << 3;
       }
    }
 }
@@ -1663,7 +1658,7 @@ ac_set_mutable_cb_surface_fields(const struct radeon_info *info, const struct ac
 
       pitch_tile_max = level_info->nblk_x / 8 - 1;
       slice_tile_max = (level_info->nblk_x * level_info->nblk_y) / 64 - 1;
-      tile_mode_index = ac_tile_mode_index(surf, state->base_level, false);
+      tile_mode_index = ac_surface_get_legacy_tiling_index(surf, state->base_level, false);
 
       cb->cb_color_attrib |= S_028C74_TILE_MODE_INDEX(tile_mode_index);
       cb->cb_color_pitch = S_028C64_TILE_MAX(pitch_tile_max);

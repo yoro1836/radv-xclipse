@@ -16,6 +16,7 @@
 
 #include "ac_vcn_enc.h"
 #include "radv_constants.h"
+#include "radv_drirc.h"
 #include "radv_instance.h"
 #include "radv_queue.h"
 #include "radv_radeon_winsys.h"
@@ -60,11 +61,15 @@ enum radv_video_enc_hw_ver {
  *
  * - full: Disable HiZ/HiS at draw time when required to prevent the issue to happen. This solution
  *   should be completely safe but it might decrease performance in some cases.
+ *
+ * - full_rez: Disable HiZ/HiS like full and force the fragment Z-order to early-Z-then-ReZ to recover
+ *   some of the early-Z rejection lost by disabling HiZ.
  */
 enum radv_gfx12_hiz_wa {
    RADV_GFX12_HIZ_WA_DISABLED,
    RADV_GFX12_HIZ_WA_PARTIAL,
    RADV_GFX12_HIZ_WA_FULL,
+   RADV_GFX12_HIZ_WA_FULL_REZ,
 };
 
 enum radv_drm_device_type {
@@ -135,15 +140,21 @@ struct radv_physical_device {
    bool emulate_etc2;
    /* The texture unit has no BC4/BC5/BC6H/BC7 decoder; decode them on the GPU at upload. */
    bool emulate_bc;
-   /* Xclipse, on by default: BC5_UNORM's EAC plane shares plane 0's memory and uploads transcode
+   /* Xclipse, on by default: BC5's (and BC4_SNORM's) EAC plane shares plane 0's memory and uploads transcode
     * straight from the copy's source buffer (radv_image.xclipse_bc_alias). Faster uploads, half the
     * memory; reads of the image AS BC5 (copies out, uint views) then return EAC data.
     * RADV_XCLIPSE_BC5_ALIAS=0 or setprop debug.radv_xclipse_bc5_alias 0 turns it off. */
    bool xclipse_bc5_alias;
+   /* The same for BC7_UNORM / BC7_SRGB and their BC3 carrier: half the memory (a fifth for sRGB on its
+    * old RGBA8 plane). RADV_XCLIPSE_BC7_ALIAS=0 or setprop debug.radv_xclipse_bc7_alias 0 turns it off. */
+   bool xclipse_bc7_alias;
    /* Xclipse: DCC on colour targets; RADV_XCLIPSE_DCC=0 / debug.radv_xclipse_dcc 0 turns it off. */
    bool xclipse_dcc;
    /* Xclipse: DCC also for colour targets of 512x512 and less (debug.radv_xclipse_dcc_small 0 = off). */
    bool xclipse_dcc_small;
+   /* Xclipse 960: restate the vendor's GL2/LLC cache policy every submit (RADV_XCLIPSE_LLC=1 /
+    * debug.radv_xclipse_llc 1; off by default). */
+   bool xclipse_llc;
 
    /* Whether to emulate ASTC image support on HW without support. */
    bool emulate_astc;
@@ -226,6 +237,8 @@ struct radv_physical_device {
    /* Cached device used to query heap info. */
    simple_mtx_t drm_device_mtx;
    ac_drm_device *drm_device;
+
+   struct radv_drirc drirc;
 };
 
 VK_DEFINE_HANDLE_CASTS(radv_physical_device, vk.base, VkPhysicalDevice, VK_OBJECT_TYPE_PHYSICAL_DEVICE)
@@ -243,8 +256,7 @@ radv_dedicated_sparse_queue_enabled(const struct radv_physical_device *pdev)
 {
    /* Dedicated sparse queue requires VK_QUEUE_SUBMIT_MODE_THREADED, which is incompatible with
     * VK_DEVICE_TIMELINE_MODE_EMULATED. */
-   return pdev->info.has_timeline_syncobj &&
-          radv_sparse_enabled(pdev);
+   return pdev->info.has_timeline_syncobj && radv_sparse_enabled(pdev);
 }
 
 static inline bool
@@ -288,10 +300,6 @@ bool radv_use_bvh8(const struct radv_physical_device *pdev);
 
 bool radv_is_dcc_disabled(const struct radv_physical_device *pdev);
 
-bool radv_are_dcc_stores_disabled(const struct radv_physical_device *pdev);
-
-bool radv_are_dcc_mips_disabled(const struct radv_physical_device *pdev);
-
 VkResult create_drm_physical_device(struct vk_instance *vk_instance, struct _drmDevice *device,
                                     struct vk_physical_device **out);
 
@@ -306,6 +314,8 @@ bool radv_compute_queue_enabled(const struct radv_physical_device *pdev);
 bool radv_spm_trace_enabled(const struct radv_physical_device *pdev);
 
 bool radv_tmz_enabled(const struct radv_physical_device *pdev);
+
+bool radv_is_rt_wave64_enabled(const struct radv_physical_device *pdev);
 
 static inline uint32_t
 radv_get_sampled_image_desc_size(const struct radv_physical_device *pdev)
@@ -326,6 +336,16 @@ static inline uint32_t
 radv_get_combined_image_sampler_offset(const struct radv_physical_device *pdev)
 {
    return radv_get_combined_image_sampler_desc_size(pdev) - RADV_SAMPLER_DESC_SIZE;
+}
+
+/* Streamout the GFX11 way (NGG, offsets in the GS registers GDS_STRMOUT_DWORDS_WRITTEN_*, which TITAN
+ * calls SPI_STRMOUT_DWORDS_WRITTEN_*), not GFX10_3's legacy VGT streamout. TITAN (Xclipse 530, 940)
+ * has the GFX11 registers, its vendor driver streams out with ds_ordered_count + ds_add_gs_reg_rtn,
+ * and our legacy (non-NGG) path draws nothing there. */
+static inline bool
+radv_use_gfx11_streamout(const struct radv_physical_device *pdev)
+{
+   return pdev->info.gfx_level >= GFX11 || pdev->info.family == CHIP_TITAN;
 }
 
 #endif /* RADV_PHYSICAL_DEVICE_H */

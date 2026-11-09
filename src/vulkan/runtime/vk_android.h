@@ -1,5 +1,6 @@
 /*
  * Copyright © 2023 Collabora, Ltd.
+ * Copyright © 2026 Google LLC
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -118,6 +119,8 @@ VkFormat vk_ahb_format_to_image_format(uint32_t ahb_format);
 
 uint32_t vk_image_format_to_ahb_format(VkFormat vk_format);
 
+VkFormat vk_external_format_to_efr_format(VkFormat external_format);
+
 uint64_t vk_image_usage_to_ahb_usage(const VkImageCreateFlags2KHR vk_create,
                                      const VkImageUsageFlags2KHR vk_usage);
 
@@ -128,6 +131,13 @@ VkResult vk_android_get_ahb_layout(
    struct AHardwareBuffer *ahardware_buffer,
    VkImageDrmFormatModifierExplicitCreateInfoEXT *out,
    VkSubresourceLayout *out_layouts, int max_planes);
+
+/* As vk_android_get_ahb_layout(), and also accepts planes in separate dma-bufs: plane_fds[i] is
+ * the dma-buf holding plane i, whose layout offset is then relative to that fd. */
+VkResult vk_android_get_ahb_layout_fds(
+   struct AHardwareBuffer *ahardware_buffer,
+   VkImageDrmFormatModifierExplicitCreateInfoEXT *out,
+   VkSubresourceLayout *out_layouts, int max_planes, int *plane_fds);
 
 VkResult vk_android_get_ahb_image_properties(
    VkPhysicalDevice pdev_handle,
@@ -141,6 +151,45 @@ void vk_android_get_ahb_buffer_properties(
 
 bool vk_android_rp_attachment_has_external_format(
    const VkAttachmentDescription2 *desc);
+
+VkFormat vk_android_get_external_format(const void *pnext);
+
+bool vk_android_is_efr_rp(struct vk_device *device,
+                          const VkRenderPassCreateInfo2 *info);
+
+VkResult vk_android_create_efr_rp(struct vk_device *device,
+                                  const VkRenderPassCreateInfo2 *info,
+                                  const VkAllocationCallbacks *alloc,
+                                  VkRenderPass *out_rp_handle);
+
+bool vk_android_is_efr_rendering_info(const VkRenderingInfo *info);
+
+const VkRenderingInfo *vk_android_get_efr_rendering_info(
+   const VkRenderingInfo *info,
+   VkRenderingInfo *local_info,
+   VkRenderingAttachmentInfo *local_color_att);
+
+bool vk_android_is_efr_inheritance_rendering_info(
+   const VkCommandBufferInheritanceInfo *info,
+   const VkCommandBufferInheritanceRenderingInfo *r_info);
+
+const VkCommandBufferInheritanceRenderingInfo *
+vk_android_get_efr_inheritance_rendering_info(
+   const VkCommandBufferInheritanceInfo *info,
+   const VkCommandBufferInheritanceRenderingInfo *r_info,
+   VkCommandBufferInheritanceRenderingInfo *local_info,
+   VkFormat *local_color_format);
+
+bool vk_android_is_efr_pipeline_rendering_info(
+   const VkGraphicsPipelineCreateInfo *info,
+   const VkPipelineRenderingCreateInfo *r_info);
+
+const VkPipelineRenderingCreateInfo *
+vk_android_get_efr_pipeline_rendering_info(
+   const VkGraphicsPipelineCreateInfo *info,
+   const VkPipelineRenderingCreateInfo *r_info,
+   VkPipelineRenderingCreateInfo *local_info,
+   VkFormat *local_color_format);
 
 #else /* defined(VK_USE_PLATFORM_ANDROID_KHR) && ANDROID_API_LEVEL >= 26 */
 
@@ -160,6 +209,12 @@ static inline uint32_t
 vk_image_format_to_ahb_format(VkFormat vk_format)
 {
    return 0;
+}
+
+static inline VkFormat
+vk_external_format_to_efr_format(VkFormat external_format)
+{
+   return VK_FORMAT_UNDEFINED;
 }
 
 static inline uint64_t
@@ -185,6 +240,15 @@ vk_android_get_ahb_layout(
 }
 
 static inline VkResult
+vk_android_get_ahb_layout_fds(
+   struct AHardwareBuffer *ahardware_buffer,
+   VkImageDrmFormatModifierExplicitCreateInfoEXT *out,
+   VkSubresourceLayout *out_layouts, int max_planes, int *plane_fds)
+{
+   return VK_ERROR_FEATURE_NOT_PRESENT;
+}
+
+static inline VkResult
 vk_android_get_ahb_image_properties(
    VkPhysicalDevice pdev_handle,
    const VkPhysicalDeviceImageFormatInfo2 *info,
@@ -201,11 +265,83 @@ vk_android_get_ahb_buffer_properties(
 {
 }
 
-static bool
+static inline bool
 vk_android_rp_attachment_has_external_format(
    const VkAttachmentDescription2 *desc)
 {
    return false;
+}
+
+static inline VkFormat
+vk_android_get_external_format(const void *pnext)
+{
+   return VK_FORMAT_UNDEFINED;
+}
+
+static inline bool
+vk_android_is_efr_rp(struct vk_device *device,
+                     const VkRenderPassCreateInfo2 *info)
+{
+   return false;
+}
+
+static inline VkResult
+vk_android_create_efr_rp(struct vk_device *device,
+                         const VkRenderPassCreateInfo2 *info,
+                         const VkAllocationCallbacks *alloc,
+                         VkRenderPass *out_rp_handle)
+{
+   return VK_ERROR_UNKNOWN;
+}
+
+static inline bool
+vk_android_is_efr_rendering_info(const VkRenderingInfo *info)
+{
+   return false;
+}
+
+static inline const VkRenderingInfo *
+vk_android_get_efr_rendering_info(const VkRenderingInfo *info,
+                                  VkRenderingInfo *local_info,
+                                  VkRenderingAttachmentInfo *local_color_att)
+{
+   return NULL;
+}
+
+static inline bool
+vk_android_is_efr_inheritance_rendering_info(
+   const VkCommandBufferInheritanceInfo *info,
+   const VkCommandBufferInheritanceRenderingInfo *r_info)
+{
+   return false;
+}
+
+static inline const VkCommandBufferInheritanceRenderingInfo *
+vk_android_get_efr_inheritance_rendering_info(
+   const VkCommandBufferInheritanceInfo *info,
+   const VkCommandBufferInheritanceRenderingInfo *r_info,
+   VkCommandBufferInheritanceRenderingInfo *local_info,
+   VkFormat *local_color_format)
+{
+   return NULL;
+}
+
+static inline bool
+vk_android_is_efr_pipeline_rendering_info(
+   const VkGraphicsPipelineCreateInfo *info,
+   const VkPipelineRenderingCreateInfo *r_info)
+{
+   return false;
+}
+
+static inline const VkPipelineRenderingCreateInfo *
+vk_android_get_efr_pipeline_rendering_info(
+   const VkGraphicsPipelineCreateInfo *info,
+   const VkPipelineRenderingCreateInfo *r_info,
+   VkPipelineRenderingCreateInfo *local_info,
+   VkFormat *local_color_format)
+{
+   return NULL;
 }
 
 #endif /* ANDROID_API_LEVEL >= 26 */

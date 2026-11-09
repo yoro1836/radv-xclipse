@@ -1,6 +1,6 @@
 # Third-party notices
 
-This repository is a subset of Mesa 26.2.1 with changes by JimVulkan. Every file keeps the
+This repository is a subset of Mesa 27.0.0-devel with changes by JimVulkan. Every file keeps the
 license stated in its header, and most are MIT (`LICENSE`); `docs/license.rst` is Mesa's own
 overview. The files below are under other licenses. Full license texts are in `LICENSES/`.
 
@@ -76,6 +76,7 @@ Text: `LICENSES/Apache-2.0.txt`, `LICENSES/MIT.txt`
 - `include/vulkan/vulkan.h`
 - `include/vulkan/vulkan_android.h`
 - `include/vulkan/vulkan_core.h`
+- `include/vulkan/vulkan_wayland.h`
 - `src/vulkan/registry/vk.xml`
 
 ## BSD-2-Clause
@@ -83,7 +84,6 @@ Text: `LICENSES/Apache-2.0.txt`, `LICENSES/MIT.txt`
 Text: `LICENSES/BSD-2-Clause.txt`
 
 - `src/util/xxhash.h`
-- `src/vulkan/runtime/radix_sort/LICENSE`
 
 ## BSD-3-Clause
 

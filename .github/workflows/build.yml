@@ -1,0 +1,53 @@
+name: Build driver
+
+# Builds the driver the same way ./build.sh does and uploads the adrenotools zip.
+on:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: android/package.py names the driver after `git rev-parse --short HEAD` and
+      # takes packageVersion from `git rev-list --count HEAD`.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslang-tools bison flex pkg-config
+          python3 -m pip install --user meson mako packaging pyyaml
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Android NDK r29
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/ndk.zip" https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+          unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP"
+          echo "ANDROID_NDK_HOME=$RUNNER_TEMP/android-ndk-r29" >> "$GITHUB_ENV"
+
+      - name: Cache subproject downloads
+        uses: actions/cache@v4
+        with:
+          path: subprojects/packagecache
+          key: subprojects-${{ hashFiles('subprojects/*.wrap') }}
+
+      - name: Build
+        run: ./build.sh "$ANDROID_NDK_HOME"
+
+      - name: Upload the driver zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: radv-xclipse-${{ github.sha }}
+          path: dist/radv-xclipse-*.zip
+          if-no-files-found: error
+
+      - name: Upload the Meson logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meson-logs
+          path: build-android/meson-logs/
